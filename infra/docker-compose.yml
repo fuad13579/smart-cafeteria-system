@@ -1,0 +1,65 @@
+services:
+  postgres:
+    image: postgres:16
+    environment:
+      POSTGRES_USER: cafeteria
+      POSTGRES_PASSWORD: cafeteria
+      POSTGRES_DB: cafeteria
+    ports:
+      - "5432:5432"
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+
+  redis:
+    image: redis:7
+    ports:
+      - "6379:6379"
+
+  rabbitmq:
+    image: rabbitmq:3-management
+    ports:
+      - "5672:5672"
+      - "15672:15672"
+
+  identity-provider:
+    build: ../services/identity-provider
+    ports:
+      - "8001:8000"
+    depends_on:
+      - redis
+
+  order-gateway:
+    build: ../services/order-gateway
+    ports:
+      - "8002:8000"
+    depends_on:
+      - redis
+      - rabbitmq
+      - identity-provider
+
+  stock-service:
+    build: ../services/stock-service
+    ports:
+      - "8003:8000"
+    depends_on:
+      - postgres
+      - redis
+
+  kitchen-queue:
+    build: ../services/kitchen-queue
+    ports:
+      - "8004:8000"
+    depends_on:
+      - rabbitmq
+      - redis
+
+  notification-hub:
+    build: ../services/notification-hub
+    ports:
+      - "8005:8000"
+    depends_on:
+      - rabbitmq
+      - redis
+
+volumes:
+  pgdata:
