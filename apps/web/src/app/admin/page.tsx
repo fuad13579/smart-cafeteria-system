@@ -99,7 +99,7 @@ export default function AdminPage() {
         <div>
           <h1 className="text-2xl font-semibold">Admin Dashboard</h1>
           <p className="mt-2 text-sm text-zinc-400">
-            Health grid, live metrics, and chaos controls.
+            Health grid, live metrics and chaos controls.
           </p>
         </div>
         <div className="text-xs text-zinc-500">

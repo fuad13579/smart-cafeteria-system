@@ -1,8 +1,7 @@
-// src/app/layout.tsx
 import "./globals.css";
 import type { Metadata } from "next";
 import { Header } from "@/components/Header";
-import { ThemeProvider } from "@/lib/theme";
+import { ThemeProvider } from "@/components/ThemeProvider";
 
 export const metadata: Metadata = {
   title: "Smart Cafeteria",
