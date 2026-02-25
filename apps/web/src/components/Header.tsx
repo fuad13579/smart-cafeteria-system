@@ -74,7 +74,7 @@ export function Header() {
           <Image src="/iut-logo.png" alt="IUT logo" width={36} height={36} className="rounded-md object-contain" />
           <div className="leading-tight">
             <div className="text-sm font-semibold text-zinc-900 dark:text-white">Smart Cafeteria</div>
-            <div className="text-xs text-zinc-600 dark:text-zinc-400">IUT Ordering</div>
+            <div className="text-xs text-zinc-600 dark:text-zinc-400">Islamic University of Technology</div>
           </div>
         </Link>
 

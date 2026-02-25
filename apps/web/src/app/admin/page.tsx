@@ -16,10 +16,10 @@ type MetricsResp = {
 function Badge({ status }: { status: Service["status"] }) {
   const cls =
     status === "up"
-      ? "bg-emerald-950/40 border-emerald-900 text-emerald-200"
+      ? "border-emerald-200 bg-emerald-50 text-emerald-700 dark:border-emerald-900 dark:bg-emerald-950/40 dark:text-emerald-200"
       : status === "degraded"
-      ? "bg-amber-950/40 border-amber-900 text-amber-200"
-      : "bg-red-950/40 border-red-900 text-red-200";
+      ? "border-amber-200 bg-amber-50 text-amber-700 dark:border-amber-900 dark:bg-amber-950/40 dark:text-amber-200"
+      : "border-red-200 bg-red-50 text-red-700 dark:border-red-900 dark:bg-red-950/40 dark:text-red-200";
 
   const label = status === "up" ? "Healthy" : status === "degraded" ? "Degraded" : "Down";
 
@@ -28,10 +28,10 @@ function Badge({ status }: { status: Service["status"] }) {
 
 function StatCard({ title, value, sub }: { title: string; value: string; sub: string }) {
   return (
-    <div className="rounded-2xl border border-zinc-900 bg-zinc-950 p-4">
-      <div className="text-xs text-zinc-500">{title}</div>
+    <div className="rounded-2xl border border-zinc-200 bg-zinc-50 p-4 dark:border-zinc-900 dark:bg-zinc-950">
+      <div className="text-xs text-zinc-600 dark:text-zinc-500">{title}</div>
       <div className="mt-2 text-2xl font-semibold">{value}</div>
-      <div className="mt-1 text-xs text-zinc-500">{sub}</div>
+      <div className="mt-1 text-xs text-zinc-600 dark:text-zinc-500">{sub}</div>
     </div>
   );
 }
@@ -98,7 +98,7 @@ export default function AdminPage() {
       <div className="flex flex-col gap-2 sm:flex-row sm:items-end sm:justify-between">
         <div>
           <h1 className="text-2xl font-semibold">Admin Dashboard</h1>
-          <p className="mt-2 text-sm text-zinc-400">
+          <p className="mt-2 text-sm text-zinc-600 dark:text-zinc-400">
             Health grid, live metrics and chaos controls.
           </p>
         </div>
@@ -132,7 +132,7 @@ export default function AdminPage() {
       </div>
 
       {/* Health grid */}
-      <div className="mt-6 rounded-2xl border border-zinc-900 bg-zinc-950 p-4">
+      <div className="mt-6 rounded-2xl border border-zinc-200 bg-zinc-50 p-4 dark:border-zinc-900 dark:bg-zinc-950">
         <div className="flex items-center justify-between">
           <div className="text-sm font-medium">Service Health</div>
           <div className="text-xs text-zinc-500">Green = healthy</div>
@@ -140,8 +140,8 @@ export default function AdminPage() {
 
         <div className="mt-4 grid grid-cols-1 gap-2 sm:grid-cols-2">
           {services.map((s) => (
-            <div key={s.name} className="flex items-center justify-between rounded-xl border border-zinc-900 bg-zinc-950 px-3 py-2">
-              <div className="text-sm text-zinc-200">{s.name}</div>
+            <div key={s.name} className="flex items-center justify-between rounded-xl border border-zinc-200 bg-white px-3 py-2 dark:border-zinc-900 dark:bg-zinc-950">
+              <div className="text-sm text-zinc-900 dark:text-zinc-200">{s.name}</div>
               <Badge status={s.status} />
             </div>
           ))}
@@ -149,9 +149,9 @@ export default function AdminPage() {
       </div>
 
       {/* Chaos controls */}
-      <div className="mt-6 rounded-2xl border border-zinc-900 bg-zinc-950 p-4">
+      <div className="mt-6 rounded-2xl border border-zinc-200 bg-zinc-50 p-4 dark:border-zinc-900 dark:bg-zinc-950">
         <div className="text-sm font-medium">Chaos Control</div>
-        <p className="mt-2 text-sm text-zinc-400">
+        <p className="mt-2 text-sm text-zinc-600 dark:text-zinc-400">
           Use during demo to prove fault tolerance (mock now, real later).
         </p>
 
@@ -161,7 +161,7 @@ export default function AdminPage() {
             <select
               value={targetService}
               onChange={(e) => setTargetService(e.target.value)}
-              className="mt-2 w-full rounded-xl border border-zinc-800 bg-zinc-950 px-3 py-2 text-sm outline-none focus:border-zinc-600"
+              className="mt-2 w-full rounded-xl border border-zinc-300 bg-white px-3 py-2 text-sm text-zinc-900 outline-none focus:border-zinc-500 dark:border-zinc-800 dark:bg-zinc-950 dark:text-zinc-100 dark:focus:border-zinc-600"
             >
               {(health?.services ?? [
                 { name: "identity-provider", status: "up" },
@@ -182,7 +182,7 @@ export default function AdminPage() {
             <select
               value={action}
               onChange={(e) => setAction(e.target.value as any)}
-              className="mt-2 w-full rounded-xl border border-zinc-800 bg-zinc-950 px-3 py-2 text-sm outline-none focus:border-zinc-600"
+              className="mt-2 w-full rounded-xl border border-zinc-300 bg-white px-3 py-2 text-sm text-zinc-900 outline-none focus:border-zinc-500 dark:border-zinc-800 dark:bg-zinc-950 dark:text-zinc-100 dark:focus:border-zinc-600"
             >
               <option value="kill">Kill</option>
               <option value="restart">Restart</option>
@@ -193,7 +193,7 @@ export default function AdminPage() {
             <button
               onClick={runChaos}
               disabled={busy}
-              className="w-full rounded-xl bg-white px-4 py-2 text-sm font-medium text-zinc-900 hover:bg-zinc-200 disabled:opacity-60"
+              className="w-full rounded-xl bg-zinc-900 px-4 py-2 text-sm font-medium text-white hover:bg-zinc-800 disabled:opacity-60 dark:bg-white dark:text-zinc-900 dark:hover:bg-zinc-200"
             >
               {busy ? "Sending…" : "Run chaos"}
             </button>
@@ -201,7 +201,7 @@ export default function AdminPage() {
         </div>
 
         {toast && (
-          <div className="mt-4 rounded-xl border border-zinc-800 bg-zinc-950 px-3 py-2 text-sm text-zinc-200">
+          <div className="mt-4 rounded-xl border border-zinc-300 bg-white px-3 py-2 text-sm text-zinc-700 dark:border-zinc-800 dark:bg-zinc-950 dark:text-zinc-200">
             {toast}
           </div>
         )}

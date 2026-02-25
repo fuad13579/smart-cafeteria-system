@@ -1,6 +1,7 @@
 @import "tailwindcss";
+@custom-variant dark (&:where(.dark, .dark *));
 
-/* Keep defaults neutral; Tailwind + next-themes will handle dark via .dark class */
+/* Keep defaults neutral; next-themes toggles `.dark` on html */
 :root {
   --background: #ffffff;
   --foreground: #171717;
