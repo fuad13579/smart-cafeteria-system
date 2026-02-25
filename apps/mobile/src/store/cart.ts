@@ -1,9 +1,14 @@
 import { create } from "zustand";
+import * as SecureStore from "expo-secure-store";
+import { calcTotal, decreaseQty, increaseQty, upsertLine } from "./cart.logic";
 
 export type CartLine = { id: string; name: string; price: number; qty: number; available: boolean };
+const CART_KEY = "sc_cart";
 
 type State = {
   lines: CartLine[];
+  hydrated: boolean;
+  hydrate: () => Promise<void>;
   add: (item: Omit<CartLine, "qty">) => void;
   inc: (id: string) => void;
   dec: (id: string) => void;
@@ -11,24 +16,54 @@ type State = {
   total: () => number;
 };
 
+async function save(lines: CartLine[]) {
+  try {
+    await SecureStore.setItemAsync(CART_KEY, JSON.stringify(lines));
+  } catch {
+    // best effort; avoid blocking UX for storage issues
+  }
+}
+
+async function load(): Promise<CartLine[]> {
+  try {
+    const raw = await SecureStore.getItemAsync(CART_KEY);
+    if (!raw) return [];
+    const parsed = JSON.parse(raw);
+    if (!Array.isArray(parsed)) return [];
+    return parsed.filter((x) => x && typeof x.id === "string" && typeof x.qty === "number");
+  } catch {
+    return [];
+  }
+}
+
 export const useCart = create<State>((set, get) => ({
   lines: [],
+  hydrated: false,
+  hydrate: async () => {
+    const lines = await load();
+    set({ lines, hydrated: true });
+  },
   add: (item) =>
     set((s) => {
-      const idx = s.lines.findIndex((l) => l.id === item.id);
-      if (idx >= 0) {
-        const next = s.lines.map((l, i) => (i === idx ? { ...l, qty: l.qty + 1 } : l));
-        return { lines: next };
-      }
-      return { lines: [...s.lines, { ...item, qty: 1 }] };
+      const lines = upsertLine(s.lines, item);
+      void save(lines);
+      return { lines };
     }),
-  inc: (id) => set((s) => ({ lines: s.lines.map((l) => (l.id === id ? { ...l, qty: l.qty + 1 } : l)) })),
+  inc: (id) =>
+    set((s) => {
+      const lines = increaseQty(s.lines, id);
+      void save(lines);
+      return { lines };
+    }),
   dec: (id) =>
-    set((s) => ({
-      lines: s.lines
-        .map((l) => (l.id === id ? { ...l, qty: Math.max(0, l.qty - 1) } : l))
-        .filter((l) => l.qty > 0),
-    })),
-  clear: () => set({ lines: [] }),
-  total: () => get().lines.reduce((sum, l) => sum + l.price * l.qty, 0),
+    set((s) => {
+      const lines = decreaseQty(s.lines, id);
+      void save(lines);
+      return { lines };
+    }),
+  clear: () => {
+    void save([]);
+    set({ lines: [] });
+  },
+  total: () => calcTotal(get().lines),
 }));

@@ -1,5 +1,5 @@
-import React, { useMemo, useState } from "react";
-import { View, Text, Pressable, FlatList, Image } from "react-native";
+import React, { useState } from "react";
+import { ActivityIndicator, View, Text, Pressable, FlatList } from "react-native";
 import { NativeStackScreenProps } from "@react-navigation/native-stack";
 import { RootStackParamList } from "../../App";
 import { useCart } from "../store/cart";
@@ -18,7 +18,7 @@ export default function CartScreen({ navigation }: Props) {
   const [busy, setBusy] = useState(false);
   const [err, setErr] = useState<string | null>(null);
 
-  const totalValue = useMemo(() => total(), [lines]); // re-evaluate on cart change
+  const totalValue = total();
 
   const place = async () => {
     setErr(null);
@@ -40,7 +40,12 @@ export default function CartScreen({ navigation }: Props) {
     return (
       <View style={{ flex: 1, padding: 18, gap: 12 }}>
         <Text style={{ color: "#fafafa", fontSize: 16, fontWeight: "600" }}>Your cart is empty</Text>
-        <Pressable onPress={() => navigation.navigate("Menu")} style={{ borderRadius: 14, paddingVertical: 12, alignItems: "center", backgroundColor: "#fafafa" }}>
+        <Pressable
+          onPress={() => navigation.navigate("Menu")}
+          accessibilityRole="button"
+          accessibilityLabel="Browse menu"
+          style={{ borderRadius: 14, paddingVertical: 12, alignItems: "center", backgroundColor: "#fafafa" }}
+        >
           <Text style={{ color: "#09090b", fontWeight: "600" }}>Browse menu</Text>
         </Pressable>
       </View>
@@ -65,11 +70,21 @@ export default function CartScreen({ navigation }: Props) {
 
             <View style={{ marginTop: 12, flexDirection: "row", justifyContent: "space-between", alignItems: "center" }}>
               <View style={{ flexDirection: "row", gap: 10, alignItems: "center" }}>
-                <Pressable onPress={() => dec(item.id)} style={{ borderRadius: 12, borderWidth: 1, borderColor: "#27272a", paddingHorizontal: 12, paddingVertical: 8 }}>
+                <Pressable
+                  onPress={() => dec(item.id)}
+                  accessibilityRole="button"
+                  accessibilityLabel={`Decrease quantity for ${item.name}`}
+                  style={{ borderRadius: 12, borderWidth: 1, borderColor: "#27272a", paddingHorizontal: 12, paddingVertical: 8 }}
+                >
                   <Text style={{ color: "#fafafa", fontSize: 16 }}>−</Text>
                 </Pressable>
                 <Text style={{ color: "#fafafa", minWidth: 24, textAlign: "center" }}>{item.qty}</Text>
-                <Pressable onPress={() => inc(item.id)} style={{ borderRadius: 12, borderWidth: 1, borderColor: "#27272a", paddingHorizontal: 12, paddingVertical: 8 }}>
+                <Pressable
+                  onPress={() => inc(item.id)}
+                  accessibilityRole="button"
+                  accessibilityLabel={`Increase quantity for ${item.name}`}
+                  style={{ borderRadius: 12, borderWidth: 1, borderColor: "#27272a", paddingHorizontal: 12, paddingVertical: 8 }}
+                >
                   <Text style={{ color: "#fafafa", fontSize: 16 }}>+</Text>
                 </Pressable>
               </View>
@@ -92,13 +107,17 @@ export default function CartScreen({ navigation }: Props) {
             <Pressable
               onPress={place}
               disabled={busy}
+              accessibilityRole="button"
+              accessibilityLabel="Place order"
               style={{ marginTop: 12, borderRadius: 14, paddingVertical: 12, alignItems: "center", backgroundColor: "#fafafa", opacity: busy ? 0.7 : 1 }}
             >
-              <Text style={{ color: "#09090b", fontWeight: "600" }}>{busy ? "Placing…" : "Place order"}</Text>
+              {busy ? <ActivityIndicator color="#09090b" /> : <Text style={{ color: "#09090b", fontWeight: "600" }}>Place order</Text>}
             </Pressable>
 
             <Pressable
               onPress={clear}
+              accessibilityRole="button"
+              accessibilityLabel="Clear cart"
               style={{ marginTop: 10, borderRadius: 14, paddingVertical: 12, alignItems: "center", borderWidth: 1, borderColor: "#27272a" }}
             >
               <Text style={{ color: "#fafafa" }}>Clear cart</Text>

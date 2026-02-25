@@ -1,10 +1,9 @@
 import React, { useEffect, useMemo, useState } from "react";
-import { View, Text, TextInput, Pressable, FlatList, Image } from "react-native";
+import { ActivityIndicator, View, Text, TextInput, Pressable, FlatList, Image } from "react-native";
 import { NativeStackScreenProps } from "@react-navigation/native-stack";
 import { RootStackParamList } from "../../App";
 import { apiMenu, MenuItem } from "../lib/api";
 import { useCart } from "../store/cart";
-import * as SecureStore from "expo-secure-store";
 import { logout } from "../lib/auth";
 import { toast } from "../../components/Toast";
 
@@ -19,19 +18,21 @@ export default function MenuScreen({ navigation }: Props) {
   const [loading, setLoading] = useState(true);
   const [err, setErr] = useState<string | null>(null);
 
+  const loadMenu = async () => {
+    try {
+      setLoading(true);
+      setErr(null);
+      const data = await apiMenu();
+      setItems(data);
+    } catch (e: any) {
+      setErr(e?.message ?? "Failed to load menu");
+    } finally {
+      setLoading(false);
+    }
+  };
+
   useEffect(() => {
-    (async () => {
-      try {
-        setLoading(true);
-        setErr(null);
-        const data = await apiMenu();
-        setItems(data);
-      } catch (e: any) {
-        setErr(e?.message ?? "Failed to load menu");
-      } finally {
-        setLoading(false);
-      }
-    })();
+    void loadMenu();
   }, []);
 
   useEffect(() => {
@@ -39,42 +40,64 @@ export default function MenuScreen({ navigation }: Props) {
       headerLeft: () => (
         <Image
           source={require("../../assets/images/iut-logo.png")}
-          style={{ width: 32, height: 32, borderRadius: 8, marginLeft: 12 }}
+          style={{ width: 32, height: 32, borderRadius: 8, marginRight: 10 }}
         />
       ),
       headerRight: () => (
-        <Pressable
-          onPress={() => navigation.navigate("Cart")}
-          style={{
-            position: "relative",
-            borderRadius: 12,
-            borderWidth: 1,
-            borderColor: "#27272a",
-            paddingHorizontal: 10,
-            paddingVertical: 7,
-          }}
-        >
-          <Text style={{ color: "#fafafa", fontSize: 12 }}>Cart</Text>
+        <View style={{ flexDirection: "row", gap: 8 }}>
+          <Pressable
+            onPress={async () => {
+              await logout();
+              toast("Logged out");
+              navigation.reset({ index: 0, routes: [{ name: "Login" }] });
+            }}
+            accessibilityRole="button"
+            accessibilityLabel="Logout"
+            style={{
+              borderRadius: 12,
+              borderWidth: 1,
+              borderColor: "#27272a",
+              paddingHorizontal: 10,
+              paddingVertical: 7,
+            }}
+          >
+            <Text style={{ color: "#fafafa", fontSize: 12 }}>Logout</Text>
+          </Pressable>
+          <Pressable
+            onPress={() => navigation.navigate("Cart")}
+            accessibilityRole="button"
+            accessibilityLabel="Open cart"
+            style={{
+              position: "relative",
+              borderRadius: 12,
+              borderWidth: 1,
+              borderColor: "#27272a",
+              paddingHorizontal: 10,
+              paddingVertical: 7,
+            }}
+          >
+            <Text style={{ color: "#fafafa", fontSize: 12 }}>Cart</Text>
 
-          {cartCount > 0 && (
-            <View
-              style={{
-                position: "absolute",
-                top: -6,
-                right: -6,
-                minWidth: 18,
-                height: 18,
-                borderRadius: 99,
-                backgroundColor: "#fafafa",
-                alignItems: "center",
-                justifyContent: "center",
-                paddingHorizontal: 5,
-              }}
-            >
-              <Text style={{ color: "#09090b", fontSize: 11, fontWeight: "700" }}>{cartCount}</Text>
-            </View>
-          )}
-        </Pressable>
+            {cartCount > 0 && (
+              <View
+                style={{
+                  position: "absolute",
+                  top: -6,
+                  right: -6,
+                  minWidth: 18,
+                  height: 18,
+                  borderRadius: 99,
+                  backgroundColor: "#fafafa",
+                  alignItems: "center",
+                  justifyContent: "center",
+                  paddingHorizontal: 5,
+                }}
+              >
+                <Text style={{ color: "#09090b", fontSize: 11, fontWeight: "700" }}>{cartCount}</Text>
+              </View>
+            )}
+          </Pressable>
+        </View>
       ),
     });
   }, [navigation, cartCount]);
@@ -85,6 +108,15 @@ export default function MenuScreen({ navigation }: Props) {
     return items.filter((i) => i.name.toLowerCase().includes(s));
   }, [items, q]);
 
+  if (loading) {
+    return (
+      <View style={{ flex: 1, alignItems: "center", justifyContent: "center", gap: 10 }}>
+        <ActivityIndicator color="#fafafa" />
+        <Text style={{ color: "#a1a1aa" }}>Loading menu…</Text>
+      </View>
+    );
+  }
+
   return (
     <View style={{ flex: 1, padding: 18 }}>
       <View style={{ flexDirection: "row", gap: 10, alignItems: "center", marginBottom: 12 }}>
@@ -93,6 +125,8 @@ export default function MenuScreen({ navigation }: Props) {
           onChangeText={setQ}
           placeholder="Search…"
           placeholderTextColor="#52525b"
+          accessibilityLabel="Search menu"
+          accessibilityHint="Filter menu items by name"
           style={{
             flex: 1,
             borderRadius: 14,
@@ -105,14 +139,27 @@ export default function MenuScreen({ navigation }: Props) {
         />
         <Pressable
           onPress={() => navigation.navigate("Cart")}
+          accessibilityRole="button"
+          accessibilityLabel="Open cart"
           style={{ borderRadius: 14, borderWidth: 1, borderColor: "#27272a", paddingHorizontal: 12, paddingVertical: 10 }}
         >
           <Text style={{ color: "#fafafa", fontSize: 13 }}>Cart ({cartCount})</Text>
         </Pressable>
       </View>
 
-      {loading && <Text style={{ color: "#a1a1aa" }}>Loading menu…</Text>}
-      {err && <Text style={{ color: "#fecaca" }}>{err}</Text>}
+      {err && (
+        <View style={{ gap: 8, marginBottom: 8 }}>
+          <Text style={{ color: "#fecaca" }}>{err}</Text>
+          <Pressable
+            onPress={() => void loadMenu()}
+            accessibilityRole="button"
+            accessibilityLabel="Retry loading menu"
+            style={{ alignSelf: "flex-start", borderRadius: 10, borderWidth: 1, borderColor: "#7f1d1d", paddingHorizontal: 10, paddingVertical: 6 }}
+          >
+            <Text style={{ color: "#fecaca", fontSize: 12 }}>Retry</Text>
+          </Pressable>
+        </View>
+      )}
 
       <FlatList
         data={filtered}
@@ -138,6 +185,8 @@ export default function MenuScreen({ navigation }: Props) {
                 add({ id: item.id, name: item.name, price: item.price, available: item.available });
                 toast(`${item.name} added to cart`);
               }}
+              accessibilityRole="button"
+              accessibilityLabel={`Add ${item.name} to cart`}
               style={{
                 marginTop: 12,
                 borderRadius: 14,

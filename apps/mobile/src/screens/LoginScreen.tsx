@@ -1,5 +1,5 @@
 import React, { useState } from "react";
-import { View, Text, TextInput, Pressable } from "react-native";
+import { ActivityIndicator, View, Text, TextInput, Pressable } from "react-native";
 import * as SecureStore from "expo-secure-store";
 import { NativeStackScreenProps } from "@react-navigation/native-stack";
 import { RootStackParamList } from "../../App";
@@ -15,10 +15,20 @@ export default function LoginScreen({ navigation }: Props) {
   const [err, setErr] = useState<string | null>(null);
 
   const submit = async () => {
+    const trimmed = studentId.trim();
+    if (!trimmed) {
+      setErr("Student ID is required.");
+      return;
+    }
+    if (!password.trim()) {
+      setErr("Password is required.");
+      return;
+    }
+
     setErr(null);
     setBusy(true);
     try {
-      const res = await apiLogin(studentId.trim(), password);
+      const res = await apiLogin(trimmed, password);
       await SecureStore.setItemAsync("sc_token", res.access_token);
       await SecureStore.setItemAsync("sc_user", JSON.stringify(res.user));
       toast("Login successful");
@@ -42,6 +52,9 @@ export default function LoginScreen({ navigation }: Props) {
           onChangeText={setStudentId}
           placeholder="e.g. 2100xxx"
           placeholderTextColor="#52525b"
+          accessibilityLabel="Student ID"
+          accessibilityHint="Enter your IUT student ID"
+          autoCapitalize="none"
           style={{
             marginTop: 8,
             borderRadius: 14,
@@ -60,6 +73,8 @@ export default function LoginScreen({ navigation }: Props) {
           secureTextEntry
           placeholder="••••••••"
           placeholderTextColor="#52525b"
+          accessibilityLabel="Password"
+          accessibilityHint="Enter your account password"
           style={{
             marginTop: 8,
             borderRadius: 14,
@@ -80,6 +95,9 @@ export default function LoginScreen({ navigation }: Props) {
         <Pressable
           onPress={submit}
           disabled={busy}
+          accessibilityRole="button"
+          accessibilityLabel="Sign in"
+          accessibilityHint="Attempts login with your credentials"
           style={{
             marginTop: 14,
             borderRadius: 14,
@@ -89,7 +107,7 @@ export default function LoginScreen({ navigation }: Props) {
             opacity: busy ? 0.7 : 1,
           }}
         >
-          <Text style={{ color: "#09090b", fontWeight: "600" }}>{busy ? "Signing in…" : "Sign in"}</Text>
+          {busy ? <ActivityIndicator color="#09090b" /> : <Text style={{ color: "#09090b", fontWeight: "600" }}>Sign in</Text>}
         </Pressable>
 
         <Text style={{ marginTop: 10, fontSize: 12, color: "#71717a" }}>(Mock mode) Any ID works for now.</Text>

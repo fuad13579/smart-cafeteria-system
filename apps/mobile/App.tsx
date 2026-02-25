@@ -1,6 +1,6 @@
 import "react-native-gesture-handler";
 import React, { useEffect, useState } from "react";
-import { AppState } from "react-native";
+import { ActivityIndicator, AppState, View } from "react-native";
 import { NavigationContainer, DefaultTheme } from "@react-navigation/native";
 import { createNativeStackNavigator } from "@react-navigation/native-stack";
 import * as SecureStore from "expo-secure-store";
@@ -10,6 +10,8 @@ import MenuScreen from "./src/screens/MenuScreen.tsx";
 import CartScreen from "./src/screens/CartScreen.tsx";
 import OrderScreen from "./src/screens/OrderScreen.tsx";
 import ToastHost from "./components/Toast";
+import { useCart } from "./src/store/cart";
+import { runCartLogicSelfTest } from "./src/store/cart.logic.test";
 
 export type RootStackParamList = {
   Login: undefined;
@@ -35,12 +37,24 @@ const theme = {
 export default function App() {
   const [booting, setBooting] = useState(true);
   const [hasToken, setHasToken] = useState(false);
+  const hydrateCart = useCart((s) => s.hydrate);
 
   useEffect(() => {
     let mounted = true;
 
     const sync = async () => {
-      const t = await SecureStore.getItemAsync("sc_token");
+      if (__DEV__) {
+        try {
+          runCartLogicSelfTest();
+        } catch (e) {
+          console.error(e);
+        }
+      }
+
+      const [t] = await Promise.all([
+        SecureStore.getItemAsync("sc_token"),
+        hydrateCart(),
+      ]);
       if (!mounted) return;
       setHasToken(!!t);
       setBooting(false);
@@ -58,7 +72,13 @@ export default function App() {
     };
   }, []);
 
-  if (booting) return null;
+  if (booting) {
+    return (
+      <View style={{ flex: 1, alignItems: "center", justifyContent: "center", backgroundColor: "#09090b" }}>
+        <ActivityIndicator size="large" color="#fafafa" />
+      </View>
+    );
+  }
 
   return (
     <NavigationContainer theme={theme}>
