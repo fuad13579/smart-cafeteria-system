@@ -129,6 +129,21 @@ services:
       timeout: 5s
       retries: 10
 
+  payment-service:
+    build: ../services/payment-service
+    ports:
+      - "8006:8000"
+    networks: [backend]
+    restart: unless-stopped
+    depends_on:
+      redis:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD-SHELL", "python -c \"import urllib.request; urllib.request.urlopen('http://localhost:8000/health')\""]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+
 networks:
   backend:
     driver: bridge

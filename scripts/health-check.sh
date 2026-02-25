@@ -8,6 +8,7 @@ services=(
   "http://localhost:8003/health"
   "http://localhost:8004/health"
   "http://localhost:8005/health"
+  "http://localhost:8006/health"
 )
 
 for url in "${services[@]}"
