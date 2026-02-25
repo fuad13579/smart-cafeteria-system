@@ -1,6 +1,12 @@
 import { getToken } from "./storage";
 
-const API_BASE = process.env.NEXT_PUBLIC_API_URL || "http://localhost:3001";
+const API_MODE = process.env.NEXT_PUBLIC_API_MODE || "mock";
+const API_BASE = process.env.NEXT_PUBLIC_API_BASE_URL || "http://localhost:8002";
+
+function resolveUrl(endpoint: string): string {
+  if (API_MODE === "mock") return endpoint;
+  return `${API_BASE}${endpoint}`;
+}
 
 export interface MenuItem {
   id: string;
@@ -39,7 +45,7 @@ async function makeRequest<T>(
     headers["Authorization"] = `Bearer ${token}`;
   }
 
-  const response = await fetch(`${API_BASE}${endpoint}`, {
+  const response = await fetch(resolveUrl(endpoint), {
     method,
     headers,
     body: body ? JSON.stringify(body) : undefined,
