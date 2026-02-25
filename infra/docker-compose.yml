@@ -1,4 +1,5 @@
-services:
+
+    services:
   postgres:
     image: postgres:16
     environment:
@@ -9,57 +10,130 @@ services:
       - "5432:5432"
     volumes:
       - pgdata:/var/lib/postgresql/data
+    networks: [backend]
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U cafeteria -d cafeteria"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
 
   redis:
     image: redis:7
     ports:
       - "6379:6379"
+    networks: [backend]
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 3s
+      retries: 10
 
   rabbitmq:
     image: rabbitmq:3-management
     ports:
       - "5672:5672"
       - "15672:15672"
+    volumes:
+      - rabbitmq_data:/var/lib/rabbitmq
+    networks: [backend]
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD-SHELL", "rabbitmq-diagnostics -q ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
 
   identity-provider:
     build: ../services/identity-provider
     ports:
       - "8001:8000"
+    networks: [backend]
+    restart: unless-stopped
     depends_on:
-      - redis
+      redis:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD-SHELL", "python -c \"import urllib.request; urllib.request.urlopen('http://localhost:8000/health')\""]
+      interval: 10s
+      timeout: 5s
+      retries: 10
 
   order-gateway:
     build: ../services/order-gateway
     ports:
       - "8002:8000"
+    networks: [backend]
+    restart: unless-stopped
     depends_on:
-      - redis
-      - rabbitmq
-      - identity-provider
+      redis:
+        condition: service_healthy
+      rabbitmq:
+        condition: service_healthy
+      identity-provider:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD-SHELL", "python -c \"import urllib.request; urllib.request.urlopen('http://localhost:8000/health')\""]
+      interval: 10s
+      timeout: 5s
+      retries: 10
 
   stock-service:
     build: ../services/stock-service
     ports:
       - "8003:8000"
+    networks: [backend]
+    restart: unless-stopped
     depends_on:
-      - postgres
-      - redis
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD-SHELL", "python -c \"import urllib.request; urllib.request.urlopen('http://localhost:8000/health')\""]
+      interval: 10s
+      timeout: 5s
+      retries: 10
 
   kitchen-queue:
     build: ../services/kitchen-queue
     ports:
       - "8004:8000"
+    networks: [backend]
+    restart: unless-stopped
     depends_on:
-      - rabbitmq
-      - redis
+      rabbitmq:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD-SHELL", "python -c \"import urllib.request; urllib.request.urlopen('http://localhost:8000/health')\""]
+      interval: 10s
+      timeout: 5s
+      retries: 10
 
   notification-hub:
     build: ../services/notification-hub
     ports:
       - "8005:8000"
+    networks: [backend]
+    restart: unless-stopped
     depends_on:
-      - rabbitmq
-      - redis
+      rabbitmq:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD-SHELL", "python -c \"import urllib.request; urllib.request.urlopen('http://localhost:8000/health')\""]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+
+networks:
+  backend:
+    driver: bridge
 
 volumes:
   pgdata:
+  rabbitmq_data:
