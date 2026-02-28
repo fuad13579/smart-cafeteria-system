@@ -2,16 +2,17 @@
 
 import { useEffect, useMemo, useState } from "react";
 import { getMenu, type MenuContext, type MenuItem } from "@/lib/api";
-import { getCart, setCart, type CartLine } from "@/lib/storage";
+import { getCart, getUser, setCart, type CartLine, type User } from "@/lib/storage";
 import { useToast } from "@/components/ToastProvider";
 import Link from "next/link";
 
 export default function MenuPage() {
   const { showToast } = useToast();
   const [items, setItems] = useState<MenuItem[]>([]);
-  const [context, setContext] = useState<MenuContext>("auto");
+  const [context, setContext] = useState<MenuContext>("regular");
   const [activeContext, setActiveContext] = useState<"regular" | "iftar" | "saheri">("regular");
   const [nextChangeAt, setNextChangeAt] = useState<string | null>(null);
+  const [currentUser, setCurrentUser] = useState<User | null>(null);
   const [q, setQ] = useState("");
   const [loading, setLoading] = useState(true);
   const [err, setErr] = useState<string | null>(null);
@@ -39,6 +40,17 @@ export default function MenuPage() {
     return items.filter((i) => i.name.toLowerCase().includes(s));
   }, [items, q]);
 
+  useEffect(() => {
+    const sync = () => setCurrentUser(getUser());
+    sync();
+    window.addEventListener("storage", sync);
+    const t = setInterval(sync, 1000);
+    return () => {
+      window.removeEventListener("storage", sync);
+      clearInterval(t);
+    };
+  }, []);
+
   const add = (item: MenuItem) => {
     const cart = getCart();
     const idx = cart.findIndex((c: CartLine) => c.id === item.id);
@@ -62,19 +74,26 @@ export default function MenuPage() {
           </div>
         </div>
 
-        <div className="flex gap-2">
-          <input
-            value={q}
-            onChange={(e) => setQ(e.target.value)}
-            placeholder="Search items…"
-            className="w-full rounded-xl border border-zinc-300 bg-white px-3 py-2 text-sm text-zinc-900 outline-none placeholder-zinc-500 focus:border-zinc-500 dark:border-zinc-800 dark:bg-zinc-950 dark:text-white dark:placeholder-zinc-400 dark:focus:border-zinc-600 sm:w-64"
-          />
-          <Link
-            href="/cart"
-            className="rounded-xl border border-zinc-300 px-4 py-2 text-sm text-zinc-700 hover:bg-zinc-100 dark:border-zinc-800 dark:text-zinc-200 dark:hover:bg-zinc-900"
-          >
-            View cart
-          </Link>
+        <div className="flex flex-col items-stretch gap-2 sm:items-end">
+          {typeof currentUser?.account_balance === "number" && (
+            <div className="text-sm text-zinc-700 dark:text-zinc-300">
+              Account balance: <span className="font-semibold">BDT {currentUser.account_balance}</span>
+            </div>
+          )}
+          <div className="flex gap-2">
+            <input
+              value={q}
+              onChange={(e) => setQ(e.target.value)}
+              placeholder="Search items…"
+              className="w-full rounded-xl border border-zinc-300 bg-white px-3 py-2 text-sm text-zinc-900 outline-none placeholder-zinc-500 focus:border-zinc-500 dark:border-zinc-800 dark:bg-zinc-950 dark:text-white dark:placeholder-zinc-400 dark:focus:border-zinc-600 sm:w-64"
+            />
+            <Link
+              href="/cart"
+              className="rounded-xl border border-zinc-300 px-4 py-2 text-sm text-zinc-700 hover:bg-zinc-100 dark:border-zinc-800 dark:text-zinc-200 dark:hover:bg-zinc-900"
+            >
+              View cart
+            </Link>
+          </div>
         </div>
       </div>
 
@@ -82,7 +101,7 @@ export default function MenuPage() {
       {err && <div className="mt-6 rounded-xl border border-red-300 bg-red-50 px-3 py-2 text-sm text-red-700 dark:border-red-900 dark:bg-red-950/40 dark:text-red-200">{err}</div>}
 
       <div className="mt-4 flex flex-wrap gap-2">
-        {(["auto", "regular", "iftar", "saheri"] as const).map((ctx) => (
+        {(["regular", "iftar", "saheri"] as const).map((ctx) => (
           <button
             key={ctx}
             onClick={() => setContext(ctx)}

@@ -64,6 +64,7 @@ interface LoginResponse {
 }
 
 export type MenuContext = "auto" | "regular" | "iftar" | "saheri";
+export type WalletMethod = "BANK" | "BKASH" | "NAGAD";
 
 interface MenuResponse {
   active_context?: Exclude<MenuContext, "auto">;
@@ -89,6 +90,51 @@ export interface OrderDetails {
 export interface OrdersMeResponse {
   orders: OrderDetails[];
 }
+
+export interface WalletBalanceResponse {
+  student_id: string;
+  account_balance: number;
+}
+
+export interface WalletTransaction {
+  transaction_id: string;
+  topup_id: string;
+  method: WalletMethod;
+  amount: number;
+  status: "Pending" | "Success" | "Failed";
+  provider_ref?: string | null;
+  created_at?: string;
+  completed_at?: string | null;
+}
+
+export interface WalletTransactionsResponse {
+  transactions: WalletTransaction[];
+}
+
+export interface WalletTopupResponse {
+  ok: boolean;
+  replayed: boolean;
+  topup: {
+    topup_id: string;
+    amount: number;
+    method: WalletMethod;
+    status: "PENDING" | "COMPLETED" | "FAILED";
+    reference_id?: string;
+    redirect_url?: string | null;
+  };
+}
+
+let mockAccountBalance = 1250;
+type MockTopup = {
+  topup_id: string;
+  amount: number;
+  method: WalletMethod;
+  status: "PENDING" | "COMPLETED" | "FAILED";
+  reference_id: string;
+  created_at: string;
+  completed_at?: string | null;
+};
+let mockWalletTopups: MockTopup[] = [];
 
 function parseApiErrorMessage(raw: any, status: number): string {
   if (raw?.message && typeof raw.message === "string") return raw.message;
@@ -148,7 +194,7 @@ async function makeMockRequest<T>(
         name: "Mock User",
         id: studentId,
         student_id: studentId,
-        account_balance: 1250,
+        account_balance: mockAccountBalance,
         role,
       },
     } as T;
@@ -160,9 +206,105 @@ async function makeMockRequest<T>(
         name: "Mock User",
         id: "2100000",
         student_id: "2100000",
-        account_balance: 1250,
+        account_balance: mockAccountBalance,
         role: "student",
       },
+    } as T;
+  }
+
+  if (method === "GET" && (endpoint === "/wallet/balance" || endpoint === "/wallet")) {
+    return {
+      student_id: "2100000",
+      account_balance: mockAccountBalance,
+    } as T;
+  }
+
+  if (method === "GET" && endpoint.startsWith("/wallet/transactions")) {
+    const m = endpoint.match(/[?&]status=(all|success|pending|failed)/i);
+    const filter = (m?.[1] || "all").toLowerCase();
+    const filtered = mockWalletTopups.filter((x) => {
+      if (filter === "all") return true;
+      if (filter === "success") return x.status === "COMPLETED";
+      if (filter === "pending") return x.status === "PENDING";
+      return x.status === "FAILED";
+    });
+    return {
+      transactions: filtered.map((x) => ({
+        transaction_id: x.topup_id,
+        topup_id: x.topup_id,
+        method: x.method,
+        amount: x.amount,
+        status: x.status === "COMPLETED" ? "Success" : x.status === "FAILED" ? "Failed" : "Pending",
+        provider_ref: x.reference_id,
+        created_at: x.created_at,
+        completed_at: x.completed_at ?? null,
+      })),
+    } as T;
+  }
+
+  if (method === "POST" && endpoint === "/wallet/topups") {
+    const amount = Number(body?.amount ?? 0);
+    const rawMethod = String(body?.method ?? "BKASH").toUpperCase();
+    const method = (rawMethod === "BANK" || rawMethod === "BKASH" || rawMethod === "NAGAD" ? rawMethod : "BKASH") as WalletMethod;
+    const topupId = `topup-${Date.now()}`;
+    const reference = `REF-${Math.random().toString(36).slice(2, 10).toUpperCase()}`;
+    mockWalletTopups = [
+      {
+        topup_id: topupId,
+        amount: Math.max(amount, 0),
+        method,
+        status: "PENDING",
+        reference_id: reference,
+        created_at: new Date().toISOString(),
+        completed_at: null,
+      },
+      ...mockWalletTopups,
+    ];
+    return {
+      ok: true,
+      replayed: false,
+      topup: {
+        topup_id: topupId,
+        amount: Math.max(amount, 0),
+        method,
+        status: "PENDING",
+        reference_id: reference,
+        redirect_url: method === "BANK" ? null : `https://pay.local/${method.toLowerCase()}/${topupId}`,
+      },
+    } as T;
+  }
+
+  if (method === "POST" && endpoint.startsWith("/wallet/webhook/")) {
+    const provider = endpoint.split("/").pop()?.toUpperCase() || "BKASH";
+    const topupId = String(body?.topup_id || "");
+    const status = String(body?.status || "SUCCESS").toUpperCase();
+    const idx = mockWalletTopups.findIndex((x) => x.topup_id === topupId);
+    if (idx < 0) {
+      throw new Error("Top-up not found");
+    }
+    if (mockWalletTopups[idx].status === "PENDING") {
+      if (status === "SUCCESS") {
+        mockWalletTopups[idx] = {
+          ...mockWalletTopups[idx],
+          status: "COMPLETED",
+          reference_id: String(body?.provider_txn_id || `${provider}-MOCK-${Date.now()}`),
+          completed_at: new Date().toISOString(),
+        };
+        mockAccountBalance += mockWalletTopups[idx].amount;
+      } else {
+        mockWalletTopups[idx] = {
+          ...mockWalletTopups[idx],
+          status: "FAILED",
+          completed_at: new Date().toISOString(),
+        };
+      }
+    }
+    return {
+      ok: true,
+      already_processed: false,
+      topup_id: topupId,
+      status,
+      account_balance: mockAccountBalance,
     } as T;
   }
 
@@ -289,4 +431,37 @@ export async function getOrder(orderId: string): Promise<OrderDetails> {
 
 export async function getMyOrders(): Promise<OrdersMeResponse> {
   return makeRequest<OrdersMeResponse>("GET", "/orders/me");
+}
+
+export async function deleteOrder(orderId: string): Promise<{ ok: boolean; order_id: string }> {
+  return makeRequest<{ ok: boolean; order_id: string }>("DELETE", `/orders/${orderId}`);
+}
+
+export async function getWalletBalance(): Promise<WalletBalanceResponse> {
+  return makeRequest<WalletBalanceResponse>("GET", "/wallet");
+}
+
+export async function getWalletTransactions(
+  status: "all" | "success" | "pending" | "failed" = "all",
+  limit = 50
+): Promise<WalletTransactionsResponse> {
+  return makeRequest<WalletTransactionsResponse>(
+    "GET",
+    `/wallet/transactions?status=${encodeURIComponent(status)}&limit=${limit}`
+  );
+}
+
+export async function createWalletTopup(amount: number, method: WalletMethod): Promise<WalletTopupResponse> {
+  return makeRequest<WalletTopupResponse>("POST", "/wallet/topups", { amount, method });
+}
+
+export async function postWalletWebhook(
+  provider: "bkash" | "nagad" | "bank",
+  payload: { topup_id: string; status: "SUCCESS" | "FAILED"; provider_txn_id?: string }
+): Promise<{ ok: boolean; status: "SUCCESS" | "FAILED"; account_balance?: number }> {
+  return makeRequest<{ ok: boolean; status: "SUCCESS" | "FAILED"; account_balance?: number }>(
+    "POST",
+    `/wallet/webhook/${provider}`,
+    payload
+  );
 }

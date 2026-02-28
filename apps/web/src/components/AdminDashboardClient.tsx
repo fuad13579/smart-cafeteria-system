@@ -33,6 +33,17 @@ type AdminMenuWindow = {
   item_ids: string[];
 };
 
+type AdminWalletTopup = {
+  topup_id: string;
+  student_id: string;
+  amount: number;
+  method: "BANK" | "BKASH" | "NAGAD";
+  status: "PENDING" | "COMPLETED" | "FAILED";
+  reference_id?: string;
+  created_at?: string;
+  completed_at?: string | null;
+};
+
 function Badge({ status }: { status: Service["status"] }) {
   const cls =
     status === "up"
@@ -84,6 +95,10 @@ export function AdminDashboardClient() {
   const [windowTimezone, setWindowTimezone] = useState("Asia/Dhaka");
   const [windowActive, setWindowActive] = useState(true);
   const [windowItemIdsCsv, setWindowItemIdsCsv] = useState("");
+  const [walletTopups, setWalletTopups] = useState<AdminWalletTopup[]>([]);
+  const [walletFilter, setWalletFilter] = useState<"pending" | "success" | "failed" | "all">("pending");
+  const [walletBusy, setWalletBusy] = useState(false);
+  const [walletMessage, setWalletMessage] = useState<string | null>(null);
 
   const services = useMemo(() => health?.services ?? [], [health]);
 
@@ -109,6 +124,17 @@ export function AdminDashboardClient() {
     }
   }
 
+  async function loadWalletTopups(nextFilter: "pending" | "success" | "failed" | "all" = walletFilter) {
+    try {
+      const res = await fetch(`/api/admin/wallet/topups?status=${encodeURIComponent(nextFilter)}`, { cache: "no-store" });
+      const data = await res.json();
+      if (!res.ok) throw new Error(data?.detail ?? data?.error ?? "Failed to load wallet topups");
+      setWalletTopups(data.topups ?? []);
+    } catch (e: any) {
+      setWalletMessage(e?.message ?? "Failed to load wallet topups");
+    }
+  }
+
   useEffect(() => {
     let alive = true;
 
@@ -129,12 +155,18 @@ export function AdminDashboardClient() {
     refresh();
     loadMenu();
     loadWindows();
+    loadWalletTopups();
     const t = setInterval(refresh, 2000);
     return () => {
       alive = false;
       clearInterval(t);
     };
   }, []);
+
+  useEffect(() => {
+    loadWalletTopups(walletFilter);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [walletFilter]);
 
   const runChaos = async () => {
     setBusy(true);
@@ -388,6 +420,26 @@ export function AdminDashboardClient() {
       setWindowMessage(e?.message ?? "Window items save failed");
     } finally {
       setWindowBusy(false);
+    }
+  };
+
+  const reviewTopup = async (topupId: string, action: "approve" | "reject") => {
+    setWalletBusy(true);
+    setWalletMessage(null);
+    try {
+      const res = await fetch(`/api/admin/wallet/topups/${topupId}/review`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ action }),
+      });
+      const data = await res.json();
+      if (!res.ok) throw new Error(data?.detail ?? data?.error ?? "Review failed");
+      setWalletMessage(`Top-up ${topupId} ${action}d`);
+      await loadWalletTopups(walletFilter);
+    } catch (e: any) {
+      setWalletMessage(e?.message ?? "Review failed");
+    } finally {
+      setWalletBusy(false);
     }
   };
 
@@ -770,6 +822,88 @@ export function AdminDashboardClient() {
                   </td>
                 </tr>
               ))}
+            </tbody>
+          </table>
+        </div>
+      </div>
+
+      <div className="mt-6 rounded-2xl border border-zinc-200 bg-zinc-50 p-4 dark:border-zinc-900 dark:bg-zinc-950">
+        <div className="flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
+          <div>
+            <div className="text-sm font-medium">Bank Top-up Verification Queue</div>
+            <p className="mt-1 text-sm text-zinc-600 dark:text-zinc-400">
+              Review pending wallet top-ups and approve/reject manually.
+            </p>
+          </div>
+          <select
+            value={walletFilter}
+            onChange={(e) => setWalletFilter(e.target.value as "pending" | "success" | "failed" | "all")}
+            className="rounded-xl border border-zinc-300 bg-white px-3 py-2 text-sm text-zinc-900 outline-none focus:border-zinc-500 dark:border-zinc-800 dark:bg-zinc-950 dark:text-zinc-100 dark:focus:border-zinc-600"
+          >
+            <option value="pending">Pending</option>
+            <option value="success">Success</option>
+            <option value="failed">Failed</option>
+            <option value="all">All</option>
+          </select>
+        </div>
+
+        {walletMessage && (
+          <div className="mt-3 rounded-xl border border-zinc-300 bg-white px-3 py-2 text-sm text-zinc-700 dark:border-zinc-800 dark:bg-zinc-950 dark:text-zinc-200">
+            {walletMessage}
+          </div>
+        )}
+
+        <div className="mt-4 overflow-x-auto">
+          <table className="w-full text-sm">
+            <thead>
+              <tr className="text-left text-zinc-600 dark:text-zinc-400">
+                <th className="py-2 pr-3">Top-up ID</th>
+                <th className="py-2 pr-3">Student</th>
+                <th className="py-2 pr-3">Method</th>
+                <th className="py-2 pr-3">Amount</th>
+                <th className="py-2 pr-3">Status</th>
+                <th className="py-2 pr-3">Reference</th>
+                <th className="py-2 pr-3">Created</th>
+                <th className="py-2 pr-3">Actions</th>
+              </tr>
+            </thead>
+            <tbody>
+              {walletTopups.map((w) => (
+                <tr key={w.topup_id} className="border-t border-zinc-200 dark:border-zinc-900">
+                  <td className="py-2 pr-3 font-mono text-xs">{w.topup_id}</td>
+                  <td className="py-2 pr-3">{w.student_id}</td>
+                  <td className="py-2 pr-3">{w.method}</td>
+                  <td className="py-2 pr-3">{w.amount}</td>
+                  <td className="py-2 pr-3">{w.status}</td>
+                  <td className="py-2 pr-3 font-mono text-xs">{w.reference_id ?? "-"}</td>
+                  <td className="py-2 pr-3">{w.created_at ? new Date(w.created_at).toLocaleString() : "-"}</td>
+                  <td className="py-2 pr-3">
+                    <div className="flex gap-2">
+                      <button
+                        onClick={() => reviewTopup(w.topup_id, "approve")}
+                        disabled={walletBusy || w.status !== "PENDING"}
+                        className="rounded-lg border border-emerald-300 px-2 py-1 text-xs text-emerald-700 hover:bg-emerald-50 disabled:opacity-60 dark:border-emerald-900 dark:text-emerald-300 dark:hover:bg-emerald-950/40"
+                      >
+                        Approve
+                      </button>
+                      <button
+                        onClick={() => reviewTopup(w.topup_id, "reject")}
+                        disabled={walletBusy || w.status !== "PENDING"}
+                        className="rounded-lg border border-red-300 px-2 py-1 text-xs text-red-700 hover:bg-red-50 disabled:opacity-60 dark:border-red-900 dark:text-red-300 dark:hover:bg-red-950/40"
+                      >
+                        Reject
+                      </button>
+                    </div>
+                  </td>
+                </tr>
+              ))}
+              {walletTopups.length === 0 && (
+                <tr className="border-t border-zinc-200 dark:border-zinc-900">
+                  <td className="py-3 text-zinc-600 dark:text-zinc-400" colSpan={8}>
+                    No top-ups found.
+                  </td>
+                </tr>
+              )}
             </tbody>
           </table>
         </div>

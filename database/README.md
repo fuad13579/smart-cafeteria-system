@@ -11,6 +11,7 @@
 - `migrations/008_inventory_and_idempotency.sql` - stock quantity + reservation/idempotency tables
 - `migrations/009_order_outbox.sql` - transactional outbox table for reliable event publishing
 - `migrations/010_menu_windows.sql` - Ramadan/contextual menu windows and item assignments
+- `migrations/011_wallet_topups.sql` - wallet top-up and transaction ledger tables
 
 ## Apply migrations
 Run from repo root:

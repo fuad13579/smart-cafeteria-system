@@ -71,6 +71,7 @@ export function Header() {
 
         <nav className="flex items-center gap-2">
           <NavLink href="/menu" label="Menu" />
+          <NavLink href="/wallet" label="Wallet" />
           <NavLink href="/cart" label={`Cart (${cartCount})`} />
           <NavLink href="/orders" label="Orders" />
           {currentUser?.role === "admin" && <NavLink href="/admin" label="Admin" />}

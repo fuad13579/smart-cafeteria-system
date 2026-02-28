@@ -67,6 +67,23 @@ def _ensure_schema() -> None:
                 )
                 """
             )
+            cur.execute(
+                """
+                CREATE TABLE IF NOT EXISTS wallet_transactions (
+                    id BIGSERIAL PRIMARY KEY,
+                    student_id TEXT NOT NULL REFERENCES students(student_id) ON DELETE CASCADE,
+                    txn_type TEXT NOT NULL CHECK (txn_type IN ('TOPUP', 'ORDER_PAYMENT', 'ADJUSTMENT')),
+                    direction TEXT NOT NULL CHECK (direction IN ('CREDIT', 'DEBIT')),
+                    amount INTEGER NOT NULL CHECK (amount > 0),
+                    balance_before INTEGER NOT NULL CHECK (balance_before >= 0),
+                    balance_after INTEGER NOT NULL CHECK (balance_after >= 0),
+                    reference_type TEXT NOT NULL,
+                    reference_id TEXT NOT NULL,
+                    metadata JSONB NOT NULL DEFAULT '{}'::jsonb,
+                    created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+                )
+                """
+            )
             conn.commit()
 
 
@@ -235,6 +252,7 @@ def process_payment(payload: ProcessPaymentRequest):
             if balance < payload.amount:
                 metrics["payments_failed_total"] += 1
                 raise HTTPException(status_code=409, detail="Insufficient account balance")
+            balance_after = balance - payload.amount
 
             payment_id = f"pay-{uuid.uuid4()}"
             tx_ref = (payload.transaction_ref or f"txn-{uuid.uuid4().hex[:10]}").strip()
@@ -246,6 +264,22 @@ def process_payment(payload: ProcessPaymentRequest):
                 WHERE student_id = %s
                 """,
                 (payload.amount, payload.student_id),
+            )
+            cur.execute(
+                """
+                INSERT INTO wallet_transactions (
+                    student_id, txn_type, direction, amount, balance_before, balance_after, reference_type, reference_id, metadata
+                )
+                VALUES (%s, 'ORDER_PAYMENT', 'DEBIT', %s, %s, %s, 'order', %s, %s::jsonb)
+                """,
+                (
+                    payload.student_id,
+                    payload.amount,
+                    balance,
+                    balance_after,
+                    payload.order_id,
+                    json.dumps({"payment_method": method}),
+                ),
             )
             cur.execute(
                 """

@@ -273,6 +273,21 @@ class AdminMenuWindowItemsRequest(BaseModel):
     item_ids: list[str]
 
 
+class WalletTopupRequest(BaseModel):
+    amount: int = Field(gt=0, le=50000)
+    method: str
+
+
+class WalletWebhookRequest(BaseModel):
+    topup_id: str
+    status: str
+    provider_txn_id: str | None = None
+
+
+class AdminTopupReviewRequest(BaseModel):
+    action: str
+
+
 def _extract_token(authorization: str | None, cookie_token: str | None) -> str | None:
     if authorization and authorization.startswith("Bearer "):
         token = authorization.split(" ", 1)[1].strip()
@@ -640,6 +655,58 @@ def _ensure_outbox_schema() -> None:
             conn.commit()
 
 
+def _ensure_wallet_schema() -> None:
+    with _db_conn() as conn:
+        with conn.cursor() as cur:
+            cur.execute(
+                """
+                CREATE TABLE IF NOT EXISTS wallet_topups (
+                    id BIGSERIAL PRIMARY KEY,
+                    topup_id TEXT NOT NULL UNIQUE,
+                    student_id TEXT NOT NULL REFERENCES students(student_id) ON DELETE CASCADE,
+                    amount INTEGER NOT NULL CHECK (amount > 0),
+                    method TEXT NOT NULL CHECK (method IN ('BANK', 'BKASH', 'NAGAD')),
+                    status TEXT NOT NULL CHECK (status IN ('PENDING', 'COMPLETED', 'FAILED')),
+                    provider_ref TEXT,
+                    idempotency_key TEXT,
+                    created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+                    completed_at TIMESTAMPTZ
+                )
+                """
+            )
+            cur.execute(
+                """
+                CREATE UNIQUE INDEX IF NOT EXISTS uq_wallet_topups_student_key
+                ON wallet_topups(student_id, idempotency_key)
+                WHERE idempotency_key IS NOT NULL
+                """
+            )
+            cur.execute(
+                """
+                CREATE TABLE IF NOT EXISTS wallet_transactions (
+                    id BIGSERIAL PRIMARY KEY,
+                    student_id TEXT NOT NULL REFERENCES students(student_id) ON DELETE CASCADE,
+                    txn_type TEXT NOT NULL CHECK (txn_type IN ('TOPUP', 'ORDER_PAYMENT', 'ADJUSTMENT')),
+                    direction TEXT NOT NULL CHECK (direction IN ('CREDIT', 'DEBIT')),
+                    amount INTEGER NOT NULL CHECK (amount > 0),
+                    balance_before INTEGER NOT NULL CHECK (balance_before >= 0),
+                    balance_after INTEGER NOT NULL CHECK (balance_after >= 0),
+                    reference_type TEXT NOT NULL,
+                    reference_id TEXT NOT NULL,
+                    metadata JSONB NOT NULL DEFAULT '{}'::jsonb,
+                    created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+                )
+                """
+            )
+            cur.execute(
+                """
+                CREATE INDEX IF NOT EXISTS idx_wallet_transactions_student_created
+                ON wallet_transactions(student_id, created_at DESC)
+                """
+            )
+            conn.commit()
+
+
 def _enqueue_outbox_event(cur: Any, event_type: str, queue_name: str, payload: dict[str, Any]) -> None:
     cur.execute(
         """
@@ -648,6 +715,89 @@ def _enqueue_outbox_event(cur: Any, event_type: str, queue_name: str, payload: d
         """,
         (event_type, queue_name, json.dumps(payload)),
     )
+
+
+def _complete_topup(cur: Any, topup_id: str, provider_ref: str | None = None) -> tuple[bool, dict[str, Any]]:
+    cur.execute(
+        """
+        SELECT topup_id, student_id, amount, method, status, COALESCE(provider_ref, '')
+        FROM wallet_topups
+        WHERE topup_id = %s
+        FOR UPDATE
+        """,
+        (topup_id,),
+    )
+    row = cur.fetchone()
+    if not row:
+        raise HTTPException(status_code=404, detail="Top-up not found")
+
+    topup = {
+        "topup_id": row[0],
+        "student_id": row[1],
+        "amount": int(row[2]),
+        "method": str(row[3]),
+        "status": str(row[4]),
+        "provider_ref": str(row[5] or ""),
+    }
+    if topup["status"] == "COMPLETED":
+        return True, topup
+    if topup["status"] == "FAILED":
+        raise HTTPException(status_code=409, detail="Top-up already failed")
+
+    cur.execute(
+        """
+        SELECT account_balance
+        FROM students
+        WHERE student_id = %s AND is_active = TRUE
+        FOR UPDATE
+        """,
+        (topup["student_id"],),
+    )
+    bal_row = cur.fetchone()
+    if not bal_row:
+        raise HTTPException(status_code=404, detail="Student not found")
+    before = int(bal_row[0])
+    after = before + topup["amount"]
+
+    final_provider_ref = (provider_ref or topup["provider_ref"] or f"{topup['method']}-{uuid.uuid4().hex[:10]}").strip()
+
+    cur.execute(
+        """
+        UPDATE students
+        SET account_balance = %s
+        WHERE student_id = %s
+        """,
+        (after, topup["student_id"]),
+    )
+    cur.execute(
+        """
+        UPDATE wallet_topups
+        SET status = 'COMPLETED', provider_ref = %s, completed_at = NOW()
+        WHERE topup_id = %s
+        """,
+        (final_provider_ref, topup_id),
+    )
+    cur.execute(
+        """
+        INSERT INTO wallet_transactions (
+            student_id, txn_type, direction, amount, balance_before, balance_after, reference_type, reference_id, metadata
+        )
+        VALUES (%s, 'TOPUP', 'CREDIT', %s, %s, %s, 'topup', %s, %s::jsonb)
+        """,
+        (
+            topup["student_id"],
+            topup["amount"],
+            before,
+            after,
+            topup_id,
+            json.dumps({"method": topup["method"], "provider_ref": final_provider_ref}),
+        ),
+    )
+
+    topup["status"] = "COMPLETED"
+    topup["provider_ref"] = final_provider_ref
+    topup["account_balance"] = after
+    return False, topup
 
 
 def _outbox_backlog() -> int:
@@ -886,6 +1036,7 @@ def get_admin_metrics():
 def on_startup():
     _init_redis()
     _ensure_outbox_schema()
+    _ensure_wallet_schema()
     threading.Thread(target=_outbox_worker_loop, daemon=True).start()
     threading.Thread(target=_cache_invalidator_loop, daemon=True).start()
 
@@ -1340,6 +1491,361 @@ def auth_logout(response: Response):
     return {"ok": True}
 
 
+@app.get("/api/wallet/balance")
+def wallet_balance(
+    authorization: str | None = Header(default=None),
+    access_token: str | None = Cookie(default=None, alias=ACCESS_COOKIE_NAME),
+):
+    auth = _extract_auth(authorization, access_token)
+    if not auth:
+        raise HTTPException(status_code=401, detail="Missing or invalid token")
+
+    with _db_conn() as conn:
+        with conn.cursor() as cur:
+            cur.execute(
+                """
+                SELECT account_balance
+                FROM students
+                WHERE student_id = %s AND is_active = TRUE
+                """,
+                (auth["student_id"],),
+            )
+            row = cur.fetchone()
+            if not row:
+                raise HTTPException(status_code=404, detail="Student not found")
+            return {"student_id": auth["student_id"], "account_balance": int(row[0])}
+
+
+@app.get("/api/wallet")
+def wallet_get(
+    authorization: str | None = Header(default=None),
+    access_token: str | None = Cookie(default=None, alias=ACCESS_COOKIE_NAME),
+):
+    return wallet_balance(authorization=authorization, access_token=access_token)
+
+
+@app.get("/api/wallet/transactions")
+def wallet_transactions(
+    status: str = Query(default="all"),
+    limit: int = Query(default=50, ge=1, le=200),
+    authorization: str | None = Header(default=None),
+    access_token: str | None = Cookie(default=None, alias=ACCESS_COOKIE_NAME),
+):
+    auth = _extract_auth(authorization, access_token)
+    if not auth:
+        raise HTTPException(status_code=401, detail="Missing or invalid token")
+
+    normalized = status.strip().lower()
+    status_map = {
+        "all": None,
+        "success": "COMPLETED",
+        "pending": "PENDING",
+        "failed": "FAILED",
+    }
+    if normalized not in status_map:
+        raise HTTPException(status_code=422, detail="status must be all|success|pending|failed")
+
+    with _db_conn() as conn:
+        with conn.cursor() as cur:
+            if status_map[normalized] is None:
+                cur.execute(
+                    """
+                    SELECT topup_id, method, amount, status, provider_ref, created_at, completed_at
+                    FROM wallet_topups
+                    WHERE student_id = %s
+                    ORDER BY created_at DESC
+                    LIMIT %s
+                    """,
+                    (auth["student_id"], limit),
+                )
+            else:
+                cur.execute(
+                    """
+                    SELECT topup_id, method, amount, status, provider_ref, created_at, completed_at
+                    FROM wallet_topups
+                    WHERE student_id = %s AND status = %s
+                    ORDER BY created_at DESC
+                    LIMIT %s
+                    """,
+                    (auth["student_id"], status_map[normalized], limit),
+                )
+            rows = cur.fetchall()
+
+    txns: list[dict[str, Any]] = []
+    for row in rows:
+        topup_status = str(row[3]).upper()
+        ui_status = "Success" if topup_status == "COMPLETED" else ("Pending" if topup_status == "PENDING" else "Failed")
+        txns.append(
+            {
+                "transaction_id": row[0],
+                "topup_id": row[0],
+                "method": row[1],
+                "amount": int(row[2]),
+                "status": ui_status,
+                "provider_ref": row[4] or None,
+                "created_at": row[5].isoformat() if row[5] else None,
+                "completed_at": row[6].isoformat() if row[6] else None,
+            }
+        )
+
+    return {"transactions": txns}
+
+
+@app.post("/api/wallet/topups")
+def wallet_topup(
+    payload: WalletTopupRequest,
+    authorization: str | None = Header(default=None),
+    access_token: str | None = Cookie(default=None, alias=ACCESS_COOKIE_NAME),
+    idempotency_key: str | None = Header(default=None, alias="Idempotency-Key"),
+):
+    _should_fail()
+    auth = _extract_auth(authorization, access_token)
+    if not auth:
+        raise HTTPException(status_code=401, detail="Missing or invalid token")
+
+    method = payload.method.strip().upper()
+    if method not in {"BANK", "BKASH", "NAGAD"}:
+        raise HTTPException(status_code=422, detail="method must be BANK, BKASH, or NAGAD")
+
+    student_id = auth["student_id"]
+    key = (idempotency_key or "").strip() or None
+    topup_id = f"topup-{uuid.uuid4().hex[:12]}"
+    reference_id = f"REF-{uuid.uuid4().hex[:10].upper()}"
+    redirect_url = f"https://pay.local/{method.lower()}/{topup_id}" if method in {"BKASH", "NAGAD"} else None
+
+    with _db_conn() as conn:
+        with conn.cursor() as cur:
+            if key:
+                cur.execute(
+                    """
+                    SELECT topup_id, amount, method, status, provider_ref
+                    FROM wallet_topups
+                    WHERE student_id = %s AND idempotency_key = %s
+                    """,
+                    (student_id, key),
+                )
+                replay = cur.fetchone()
+                if replay:
+                    return {
+                        "ok": True,
+                        "replayed": True,
+                        "topup": {
+                            "topup_id": replay[0],
+                            "amount": int(replay[1]),
+                            "method": replay[2],
+                            "status": replay[3],
+                            "reference_id": replay[4] or reference_id,
+                            "redirect_url": redirect_url,
+                        },
+                    }
+
+            cur.execute(
+                """
+                SELECT student_id
+                FROM students
+                WHERE student_id = %s AND is_active = TRUE
+                """,
+                (student_id,),
+            )
+            row = cur.fetchone()
+            if not row:
+                raise HTTPException(status_code=404, detail="Student not found")
+
+            cur.execute(
+                """
+                INSERT INTO wallet_topups (
+                    topup_id, student_id, amount, method, status, provider_ref, idempotency_key
+                )
+                VALUES (%s, %s, %s, %s, 'PENDING', %s, %s)
+                """,
+                (topup_id, student_id, payload.amount, method, reference_id, key),
+            )
+            conn.commit()
+
+    return {
+        "ok": True,
+        "replayed": False,
+        "topup": {
+            "topup_id": topup_id,
+            "amount": payload.amount,
+            "method": method,
+            "status": "PENDING",
+            "reference_id": reference_id,
+            "redirect_url": redirect_url,
+        },
+    }
+
+
+@app.post("/api/wallet/webhook/{provider}")
+def wallet_webhook(
+    provider: str,
+    payload: WalletWebhookRequest,
+):
+    provider_name = provider.strip().lower()
+    if provider_name not in {"bkash", "nagad", "bank"}:
+        raise HTTPException(status_code=422, detail="provider must be bkash|nagad|bank")
+
+    incoming_status = payload.status.strip().upper()
+    if incoming_status not in {"SUCCESS", "FAILED"}:
+        raise HTTPException(status_code=422, detail="status must be SUCCESS or FAILED")
+
+    with _db_conn() as conn:
+        with conn.cursor() as cur:
+            cur.execute(
+                """
+                SELECT topup_id, method, status
+                FROM wallet_topups
+                WHERE topup_id = %s
+                FOR UPDATE
+                """,
+                (payload.topup_id,),
+            )
+            row = cur.fetchone()
+            if not row:
+                raise HTTPException(status_code=404, detail="Top-up not found")
+            if str(row[1]).strip().lower() != provider_name:
+                raise HTTPException(status_code=409, detail="Provider mismatch for top-up")
+            current_status = str(row[2]).upper()
+
+            if current_status == "COMPLETED":
+                conn.commit()
+                return {"ok": True, "already_processed": True, "topup_id": payload.topup_id, "status": "SUCCESS"}
+            if current_status == "FAILED":
+                conn.commit()
+                return {"ok": True, "already_processed": True, "topup_id": payload.topup_id, "status": "FAILED"}
+
+            if incoming_status == "FAILED":
+                cur.execute(
+                    """
+                    UPDATE wallet_topups
+                    SET status = 'FAILED', provider_ref = COALESCE(%s, provider_ref), completed_at = NOW()
+                    WHERE topup_id = %s
+                    """,
+                    (payload.provider_txn_id, payload.topup_id),
+                )
+                conn.commit()
+                return {"ok": True, "already_processed": False, "topup_id": payload.topup_id, "status": "FAILED"}
+
+            replayed, topup = _complete_topup(cur, payload.topup_id, provider_ref=payload.provider_txn_id)
+            conn.commit()
+
+    return {
+        "ok": True,
+        "already_processed": replayed,
+        "topup_id": payload.topup_id,
+        "status": "SUCCESS",
+        "account_balance": topup.get("account_balance"),
+    }
+
+
+@app.get("/api/admin/wallet/topups")
+def admin_wallet_topups(
+    status: str = Query(default="pending"),
+    authorization: str | None = Header(default=None),
+    access_token: str | None = Cookie(default=None, alias=ACCESS_COOKIE_NAME),
+):
+    _require_admin(authorization, access_token)
+    normalized = status.strip().lower()
+    status_map = {"all": None, "pending": "PENDING", "success": "COMPLETED", "failed": "FAILED"}
+    if normalized not in status_map:
+        raise HTTPException(status_code=422, detail="status must be all|pending|success|failed")
+
+    with _db_conn() as conn:
+        with conn.cursor() as cur:
+            if status_map[normalized] is None:
+                cur.execute(
+                    """
+                    SELECT topup_id, student_id, amount, method, status, provider_ref, created_at, completed_at
+                    FROM wallet_topups
+                    ORDER BY created_at DESC
+                    LIMIT 200
+                    """
+                )
+            else:
+                cur.execute(
+                    """
+                    SELECT topup_id, student_id, amount, method, status, provider_ref, created_at, completed_at
+                    FROM wallet_topups
+                    WHERE status = %s
+                    ORDER BY created_at DESC
+                    LIMIT 200
+                    """,
+                    (status_map[normalized],),
+                )
+            rows = cur.fetchall()
+
+    return {
+        "topups": [
+            {
+                "topup_id": row[0],
+                "student_id": row[1],
+                "amount": int(row[2]),
+                "method": row[3],
+                "status": row[4],
+                "reference_id": row[5],
+                "created_at": row[6].isoformat() if row[6] else None,
+                "completed_at": row[7].isoformat() if row[7] else None,
+            }
+            for row in rows
+        ]
+    }
+
+
+@app.post("/api/admin/wallet/topups/{topup_id}/review")
+def admin_review_topup(
+    topup_id: str,
+    payload: AdminTopupReviewRequest,
+    authorization: str | None = Header(default=None),
+    access_token: str | None = Cookie(default=None, alias=ACCESS_COOKIE_NAME),
+):
+    _require_admin(authorization, access_token)
+    action = payload.action.strip().lower()
+    if action not in {"approve", "reject"}:
+        raise HTTPException(status_code=422, detail="action must be approve|reject")
+
+    with _db_conn() as conn:
+        with conn.cursor() as cur:
+            cur.execute(
+                """
+                SELECT status
+                FROM wallet_topups
+                WHERE topup_id = %s
+                FOR UPDATE
+                """,
+                (topup_id,),
+            )
+            row = cur.fetchone()
+            if not row:
+                raise HTTPException(status_code=404, detail="Top-up not found")
+            current_status = str(row[0]).upper()
+
+            if current_status == "COMPLETED":
+                conn.commit()
+                return {"ok": True, "already_processed": True, "topup_id": topup_id, "status": "SUCCESS"}
+            if current_status == "FAILED":
+                conn.commit()
+                return {"ok": True, "already_processed": True, "topup_id": topup_id, "status": "FAILED"}
+
+            if action == "reject":
+                cur.execute(
+                    "UPDATE wallet_topups SET status = 'FAILED', completed_at = NOW() WHERE topup_id = %s",
+                    (topup_id,),
+                )
+                conn.commit()
+                return {"ok": True, "already_processed": False, "topup_id": topup_id, "status": "FAILED"}
+
+            replayed, topup = _complete_topup(cur, topup_id)
+            conn.commit()
+
+    return {
+        "ok": True,
+        "already_processed": replayed,
+        "topup_id": topup_id,
+        "status": "SUCCESS",
+        "account_balance": topup.get("account_balance"),
+    }
+
+
 @app.get("/api/menu")
 def get_menu(
     context: str = Query(default="auto"),
@@ -1558,6 +2064,36 @@ def get_order(
                 "total_amount": row[4],
                 "created_at": row[5].isoformat() if row[5] else None,
             }
+
+
+@app.delete("/api/orders/{order_id}")
+def delete_order(
+    order_id: str,
+    authorization: str | None = Header(default=None),
+    access_token: str | None = Cookie(default=None, alias=ACCESS_COOKIE_NAME),
+):
+    _should_fail()
+    if order_id == "me":
+        raise HTTPException(status_code=405, detail="Method not allowed")
+
+    auth = _extract_auth(authorization, access_token)
+    if not auth:
+        raise HTTPException(status_code=401, detail="Missing or invalid token")
+    student_id = auth["student_id"]
+    is_admin = auth.get("role") == "admin"
+
+    with _db_conn() as conn:
+        with conn.cursor() as cur:
+            cur.execute("SELECT student_id FROM orders WHERE id = %s", (order_id,))
+            row = cur.fetchone()
+            if not row:
+                raise HTTPException(status_code=404, detail="Order not found")
+            if row[0] != student_id and not is_admin:
+                raise HTTPException(status_code=403, detail="Forbidden")
+            cur.execute("DELETE FROM orders WHERE id = %s", (order_id,))
+            conn.commit()
+
+    return {"ok": True, "order_id": order_id}
 
 
 @app.get("/api/orders/me")
