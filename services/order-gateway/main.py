@@ -29,6 +29,8 @@ metrics: dict[str, float] = {
     "orders_failed_total": 0,
     "latency_total_ms": 0,
     "latency_count": 0,
+    "outbox_published_total": 0,
+    "outbox_publish_failed_total": 0,
 }
 latency_samples_ms: list[float] = []
 service_started_at = time.time()
@@ -36,6 +38,7 @@ service_started_at = time.time()
 chaos_state = {"enabled": False, "mode": "error"}
 stock_cache: dict[str, tuple[float, bool]] = {}
 stock_cache_lock = threading.Lock()
+outbox_worker_state = {"running": True}
 ACCESS_COOKIE_NAME = os.getenv("ACCESS_COOKIE_NAME", "access_token")
 
 
@@ -242,6 +245,138 @@ def _publish_kitchen_job(order: dict[str, Any]) -> None:
         raise HTTPException(status_code=503, detail=f"Queue unavailable: {exc}") from exc
 
 
+def _publish_queue(queue_name: str, payload: dict[str, Any]) -> None:
+    connection = pika.BlockingConnection(_rabbit_params())
+    channel = connection.channel()
+    channel.queue_declare(queue=queue_name, durable=True)
+    channel.basic_publish(
+        exchange="",
+        routing_key=queue_name,
+        body=json.dumps(payload),
+        properties=pika.BasicProperties(delivery_mode=2),
+    )
+    connection.close()
+
+
+def _ensure_outbox_schema() -> None:
+    with _db_conn() as conn:
+        with conn.cursor() as cur:
+            cur.execute(
+                """
+                CREATE TABLE IF NOT EXISTS event_outbox (
+                    id BIGSERIAL PRIMARY KEY,
+                    event_type TEXT NOT NULL,
+                    queue_name TEXT NOT NULL,
+                    payload JSONB NOT NULL,
+                    published_at TIMESTAMPTZ,
+                    attempts INTEGER NOT NULL DEFAULT 0,
+                    last_error TEXT,
+                    created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+                )
+                """
+            )
+            cur.execute(
+                """
+                CREATE INDEX IF NOT EXISTS idx_event_outbox_unpublished_created
+                ON event_outbox (created_at)
+                WHERE published_at IS NULL
+                """
+            )
+            conn.commit()
+
+
+def _enqueue_outbox_event(cur: Any, event_type: str, queue_name: str, payload: dict[str, Any]) -> None:
+    cur.execute(
+        """
+        INSERT INTO event_outbox(event_type, queue_name, payload)
+        VALUES (%s, %s, %s::jsonb)
+        """,
+        (event_type, queue_name, json.dumps(payload)),
+    )
+
+
+def _outbox_backlog() -> int:
+    try:
+        with _db_conn() as conn:
+            with conn.cursor() as cur:
+                cur.execute("SELECT COUNT(*) FROM event_outbox WHERE published_at IS NULL")
+                row = cur.fetchone()
+                return int(row[0]) if row else 0
+    except Exception:
+        return -1
+
+
+def _process_outbox_once(batch_size: int = 25) -> int:
+    processed = 0
+    with _db_conn() as conn:
+        with conn.cursor() as cur:
+            cur.execute(
+                """
+                SELECT id, queue_name, payload::text
+                FROM event_outbox
+                WHERE published_at IS NULL
+                ORDER BY created_at ASC
+                LIMIT %s
+                FOR UPDATE SKIP LOCKED
+                """,
+                (batch_size,),
+            )
+            rows = cur.fetchall()
+            if not rows:
+                conn.commit()
+                return 0
+
+            for row in rows:
+                outbox_id = int(row[0])
+                queue_name = str(row[1])
+                payload_raw = row[2]
+                try:
+                    payload = json.loads(payload_raw) if isinstance(payload_raw, str) else payload_raw
+                    _publish_queue(queue_name, payload)
+                    cur.execute(
+                        """
+                        UPDATE event_outbox
+                        SET published_at = NOW(), attempts = attempts + 1, last_error = NULL
+                        WHERE id = %s
+                        """,
+                        (outbox_id,),
+                    )
+                    metrics["outbox_published_total"] += 1
+                    processed += 1
+                except Exception as exc:
+                    cur.execute(
+                        """
+                        UPDATE event_outbox
+                        SET attempts = attempts + 1, last_error = %s
+                        WHERE id = %s
+                        """,
+                        (str(exc)[:400], outbox_id),
+                    )
+                    metrics["outbox_publish_failed_total"] += 1
+            conn.commit()
+    return processed
+
+
+def _outbox_worker_loop() -> None:
+    while outbox_worker_state["running"]:
+        try:
+            processed = _process_outbox_once()
+            if processed == 0:
+                time.sleep(0.5)
+        except Exception:
+            metrics["outbox_publish_failed_total"] += 1
+            time.sleep(1.0)
+
+
+def _release_order_reservations(order_id: str) -> None:
+    payload = {"order_id": order_id}
+    try:
+        with httpx.Client(timeout=2.0) as client:
+            client.post(f"{_stock_url()}/stock/release", json=payload)
+    except Exception:
+        pass
+
+
 def _percentile(values: list[float], pct: float) -> float:
     if not values:
         return 0.0
@@ -339,6 +474,9 @@ def get_metrics():
         "orders_failed_total": metrics["orders_failed_total"],
         "login_proxy_total": metrics["login_proxy_total"],
         "avg_response_latency_ms": round(avg_latency, 2),
+        "outbox_published_total": metrics["outbox_published_total"],
+        "outbox_publish_failed_total": metrics["outbox_publish_failed_total"],
+        "outbox_backlog": _outbox_backlog(),
     }
 
 
@@ -350,8 +488,20 @@ def get_admin_metrics():
         "latency_ms_p95": round(_percentile(latency_samples_ms, 95), 2),
         "orders_per_min": round(metrics["orders_total"] / uptime_minutes, 2),
         "queue_depth": _queue_depth("kitchen.jobs"),
+        "outbox_backlog": _outbox_backlog(),
         "updatedAt": int(time.time()),
     }
+
+
+@app.on_event("startup")
+def on_startup():
+    _ensure_outbox_schema()
+    threading.Thread(target=_outbox_worker_loop, daemon=True).start()
+
+
+@app.on_event("shutdown")
+def on_shutdown():
+    outbox_worker_state["running"] = False
 
 
 @app.post("/chaos/fail")
@@ -507,71 +657,81 @@ def create_order(
             return existing
 
     ids = list({line.id for line in payload.items})
+    order_id = str(uuid.uuid4())
+    status_value = "QUEUED"
+    eta_minutes = 12
+    reservations_done = False
 
-    with _db_conn() as conn:
-        with conn.cursor() as cur:
-            placeholders = ",".join(["%s"] * len(ids))
-            cur.execute(
-                f"SELECT id, name, price, available FROM menu_items WHERE id IN ({placeholders})",
-                tuple(ids),
-            )
-            menu_rows = cur.fetchall()
+    try:
+        with _db_conn() as conn:
+            with conn.cursor() as cur:
+                placeholders = ",".join(["%s"] * len(ids))
+                cur.execute(
+                    f"SELECT id, name, price, available FROM menu_items WHERE id IN ({placeholders})",
+                    tuple(ids),
+                )
+                menu_rows = cur.fetchall()
 
-            menu_map: dict[str, dict[str, Any]] = {
-                row[0]: {"id": row[0], "name": row[1], "price": row[2], "available": row[3]}
-                for row in menu_rows
-            }
+                menu_map: dict[str, dict[str, Any]] = {
+                    row[0]: {"id": row[0], "name": row[1], "price": row[2], "available": row[3]}
+                    for row in menu_rows
+                }
 
-            for line in payload.items:
-                item = menu_map.get(line.id)
-                if not item:
-                    metrics["orders_failed_total"] += 1
-                    return JSONResponse(status_code=400, content={"message": f"Item {line.id} not found", "error": "Bad Request"})
+                for line in payload.items:
+                    item = menu_map.get(line.id)
+                    if not item:
+                        metrics["orders_failed_total"] += 1
+                        return JSONResponse(status_code=400, content={"message": f"Item {line.id} not found", "error": "Bad Request"})
 
-            order_id = str(uuid.uuid4())
-            total = sum(menu_map[line.id]["price"] * line.qty for line in payload.items)
+                total = sum(menu_map[line.id]["price"] * line.qty for line in payload.items)
 
-            # Cache-first stock pre-check before reservation call.
-            for line in payload.items:
-                if not _is_stock_available_cached(line.id):
-                    metrics["orders_failed_total"] += 1
-                    raise HTTPException(status_code=409, detail=f"Item {line.id} unavailable")
+                # Cache-first stock pre-check before reservation call.
+                for line in payload.items:
+                    if not _is_stock_available_cached(line.id):
+                        metrics["orders_failed_total"] += 1
+                        raise HTTPException(status_code=409, detail=f"Item {line.id} unavailable")
 
-            # Reserve stock before order insert.
-            for line in payload.items:
-                _reserve_item(order_id=order_id, item_id=line.id, qty=line.qty)
+                # Reserve stock before order insert.
+                for line in payload.items:
+                    _reserve_item(order_id=order_id, item_id=line.id, qty=line.qty)
+                reservations_done = True
 
-            status_value = "QUEUED"
-            eta_minutes = 12
-
-            cur.execute(
-                """
-                INSERT INTO orders(id, student_id, status, eta_minutes, total_amount)
-                VALUES (%s, %s, %s, %s, %s)
-                """,
-                (order_id, student_id, status_value, eta_minutes, total),
-            )
-
-            for line in payload.items:
-                unit_price = menu_map[line.id]["price"]
                 cur.execute(
                     """
-                    INSERT INTO order_items(order_id, item_id, qty, unit_price)
-                    VALUES (%s, %s, %s, %s)
+                    INSERT INTO orders(id, student_id, status, eta_minutes, total_amount)
+                    VALUES (%s, %s, %s, %s, %s)
                     """,
-                    (order_id, line.id, line.qty, unit_price),
+                    (order_id, student_id, status_value, eta_minutes, total),
                 )
 
-            conn.commit()
+                for line in payload.items:
+                    unit_price = menu_map[line.id]["price"]
+                    cur.execute(
+                        """
+                        INSERT INTO order_items(order_id, item_id, qty, unit_price)
+                        VALUES (%s, %s, %s, %s)
+                        """,
+                        (order_id, line.id, line.qty, unit_price),
+                    )
 
-    _publish_kitchen_job(
-        {
-            "order_id": order_id,
-            "student_id": student_id,
-            "status": "QUEUED",
-            "eta_minutes": 12,
-        }
-    )
+                _enqueue_outbox_event(
+                    cur=cur,
+                    event_type="order.created",
+                    queue_name="kitchen.jobs",
+                    payload={
+                        "order_id": order_id,
+                        "student_id": student_id,
+                        "status": status_value,
+                        "eta_minutes": eta_minutes,
+                    },
+                )
+
+                conn.commit()
+    except Exception:
+        if reservations_done:
+            _release_order_reservations(order_id)
+        raise
+
     if key:
         _store_idempotency(student_id, key, order_id)
 

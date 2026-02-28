@@ -18,6 +18,34 @@ services:
       timeout: 5s
       retries: 10
 
+  pgbouncer:
+    image: edoburu/pgbouncer:1.24.1
+    environment:
+      DB_USER: cafeteria
+      DB_PASSWORD: cafeteria
+      DB_HOST: postgres
+      DB_PORT: 5432
+      DB_NAME: cafeteria
+      POOL_MODE: transaction
+      MAX_CLIENT_CONN: 200
+      DEFAULT_POOL_SIZE: 20
+      RESERVE_POOL_SIZE: 5
+      RESERVE_POOL_TIMEOUT: 2
+      QUERY_WAIT_TIMEOUT: 30
+      ADMIN_USERS: cafeteria
+    ports:
+      - "6432:5432"
+    networks: [backend]
+    restart: unless-stopped
+    depends_on:
+      postgres:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD-SHELL", "nc -z localhost 5432"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+
   redis:
     image: redis:7
     ports:
@@ -47,12 +75,18 @@ services:
 
   identity-provider:
     build: ../services/identity-provider
+    environment:
+      POSTGRES_HOST: pgbouncer
+      POSTGRES_PORT: 5432
+      POSTGRES_DB: cafeteria
+      POSTGRES_USER: cafeteria
+      POSTGRES_PASSWORD: cafeteria
     ports:
       - "8001:8000"
     networks: [backend]
     restart: unless-stopped
     depends_on:
-      postgres:
+      pgbouncer:
         condition: service_healthy
       redis:
         condition: service_healthy
@@ -64,12 +98,18 @@ services:
 
   order-gateway:
     build: ../services/order-gateway
+    environment:
+      POSTGRES_HOST: pgbouncer
+      POSTGRES_PORT: 5432
+      POSTGRES_DB: cafeteria
+      POSTGRES_USER: cafeteria
+      POSTGRES_PASSWORD: cafeteria
     ports:
       - "8002:8000"
     networks: [backend]
     restart: unless-stopped
     depends_on:
-      postgres:
+      pgbouncer:
         condition: service_healthy
       redis:
         condition: service_healthy
@@ -85,12 +125,18 @@ services:
 
   stock-service:
     build: ../services/stock-service
+    environment:
+      POSTGRES_HOST: pgbouncer
+      POSTGRES_PORT: 5432
+      POSTGRES_DB: cafeteria
+      POSTGRES_USER: cafeteria
+      POSTGRES_PASSWORD: cafeteria
     ports:
       - "8003:8000"
     networks: [backend]
     restart: unless-stopped
     depends_on:
-      postgres:
+      pgbouncer:
         condition: service_healthy
       redis:
         condition: service_healthy
@@ -102,11 +148,19 @@ services:
 
   kitchen-queue:
     build: ../services/kitchen-queue
+    environment:
+      POSTGRES_HOST: pgbouncer
+      POSTGRES_PORT: 5432
+      POSTGRES_DB: cafeteria
+      POSTGRES_USER: cafeteria
+      POSTGRES_PASSWORD: cafeteria
     ports:
       - "8004:8000"
     networks: [backend]
     restart: unless-stopped
     depends_on:
+      pgbouncer:
+        condition: service_healthy
       rabbitmq:
         condition: service_healthy
       redis:
@@ -119,11 +173,19 @@ services:
 
   notification-hub:
     build: ../services/notification-hub
+    environment:
+      POSTGRES_HOST: pgbouncer
+      POSTGRES_PORT: 5432
+      POSTGRES_DB: cafeteria
+      POSTGRES_USER: cafeteria
+      POSTGRES_PASSWORD: cafeteria
     ports:
       - "8005:8000"
     networks: [backend]
     restart: unless-stopped
     depends_on:
+      pgbouncer:
+        condition: service_healthy
       rabbitmq:
         condition: service_healthy
       redis:
@@ -136,11 +198,21 @@ services:
 
   payment-service:
     build: ../services/payment-service
+    environment:
+      POSTGRES_HOST: pgbouncer
+      POSTGRES_PORT: 5432
+      POSTGRES_DB: cafeteria
+      POSTGRES_USER: cafeteria
+      POSTGRES_PASSWORD: cafeteria
     ports:
       - "8006:8000"
     networks: [backend]
     restart: unless-stopped
     depends_on:
+      pgbouncer:
+        condition: service_healthy
+      rabbitmq:
+        condition: service_healthy
       redis:
         condition: service_healthy
     healthcheck:

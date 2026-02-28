@@ -9,6 +9,7 @@
 - `migrations/006_constraints.sql` - data integrity constraints
 - `migrations/007_account_balance.sql` - adds student account balance field
 - `migrations/008_inventory_and_idempotency.sql` - stock quantity + reservation/idempotency tables
+- `migrations/009_order_outbox.sql` - transactional outbox table for reliable event publishing
 
 ## Apply migrations
 Run from repo root:

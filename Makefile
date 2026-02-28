@@ -34,6 +34,9 @@ demo-seed:
 smoke-test:
 	./scripts/smoke-test.sh
 
+load-test:
+	python3 ./scripts/load-test-orders.py --rate 10 --duration 3 --concurrency 20
+
 venv-service:
 	./scripts/setup-service-venv.sh $(SERVICE)
 
