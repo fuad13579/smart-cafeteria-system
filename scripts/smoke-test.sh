@@ -124,6 +124,18 @@ if [[ -z "$state" ]]; then
   echo "$status_body"
   exit 1
 fi
+if [[ ! "$state" =~ ^(QUEUED|IN_PROGRESS|READY|COMPLETED|CANCELLED)$ ]]; then
+  echo "Order status is invalid: $state"
+  echo "$status_body"
+  exit 1
+fi
+
+eta_minutes="$(echo "$status_body" | json_get eta_minutes)"
+if ! [[ "$eta_minutes" =~ ^[0-9]+$ ]]; then
+  echo "Order status response has non-numeric eta_minutes: $eta_minutes"
+  echo "$status_body"
+  exit 1
+fi
 
 echo "[5/5] Check admin metrics keys"
 metrics_result="$(request GET "$ADMIN_BASE_URL/api/admin/metrics")"

@@ -3,8 +3,16 @@
 import { useEffect, useState } from "react";
 import Link from "next/link";
 import { useParams } from "next/navigation";
+import { getOrder, type OrderStatus } from "@/lib/api";
 
-const steps = ["QUEUED", "IN_PROGRESS", "READY", "COMPLETED"] as const;
+const steps: OrderStatus[] = [
+  "QUEUED",
+  "IN_PROGRESS",
+  "READY",
+  "COMPLETED",
+  "CANCELLED",
+];
+const terminalStates: OrderStatus[] = ["READY", "COMPLETED", "CANCELLED"];
 
 function Step({ label, active }: { label: string; active: boolean }) {
   return (
@@ -17,23 +25,62 @@ function Step({ label, active }: { label: string; active: boolean }) {
 
 export default function OrderPage() {
   const params = useParams<{ id: string }>();
-  const [status, setStatus] = useState<(typeof steps)[number]>("QUEUED");
+  const orderId = params.id;
+  const [status, setStatus] = useState<OrderStatus>("QUEUED");
   const [eta, setEta] = useState<number>(12);
+  const [loading, setLoading] = useState(true);
+  const [err, setErr] = useState<string | null>(null);
 
-  // Mock progression for now (replace with websocket later)
   useEffect(() => {
-    const seq: Array<(typeof steps)[number]> = ["QUEUED", "IN_PROGRESS", "READY", "COMPLETED"];
-    let i = 0;
-    const t = setInterval(() => {
-      i = Math.min(i + 1, seq.length - 1);
-      setStatus(seq[i]);
-      setEta((x) => Math.max(0, x - 3));
-      if (i === seq.length - 1) clearInterval(t);
-    }, 3500);
-    return () => clearInterval(t);
-  }, []);
+    let cancelled = false;
+    let pollRef: ReturnType<typeof setInterval> | null = null;
+
+    const load = async (showLoading = false) => {
+      if (!orderId) return;
+      if (showLoading) setLoading(true);
+      try {
+        const res = await getOrder(orderId);
+        if (cancelled) return;
+        setErr(null);
+        setStatus(res.status);
+        setEta(Math.max(0, res.eta_minutes ?? 0));
+        if (terminalStates.includes(res.status) && pollRef) {
+          clearInterval(pollRef);
+          pollRef = null;
+        }
+      } catch (e: any) {
+        if (cancelled) return;
+        setErr(e?.message ?? "Failed to load order status");
+      } finally {
+        if (!cancelled) setLoading(false);
+      }
+    };
+
+    load(true);
+    pollRef = setInterval(() => {
+      if (terminalStates.includes(status)) return;
+      load(false);
+    }, 4000);
+
+    return () => {
+      cancelled = true;
+      if (pollRef) clearInterval(pollRef);
+    };
+  }, [orderId, status]);
 
   const activeIndex = steps.indexOf(status);
+  const retry = () => {
+    if (!orderId) return;
+    setLoading(true);
+    getOrder(orderId)
+      .then((res) => {
+        setErr(null);
+        setStatus(res.status);
+        setEta(Math.max(0, res.eta_minutes ?? 0));
+      })
+      .catch((e: any) => setErr(e?.message ?? "Failed to load order status"))
+      .finally(() => setLoading(false));
+  };
 
   return (
     <div className="mx-auto max-w-xl">
@@ -48,6 +95,21 @@ export default function OrderPage() {
       </div>
 
       <div className="mt-6 rounded-2xl border border-zinc-200 bg-zinc-50 p-5 dark:border-zinc-900 dark:bg-zinc-950">
+        {loading && (
+          <div className="mb-4 text-sm text-zinc-600 dark:text-zinc-400">Loading order status…</div>
+        )}
+        {err && (
+          <div className="mb-4 rounded-xl border border-amber-300 bg-amber-50 px-3 py-2 text-sm text-amber-800 dark:border-amber-900 dark:bg-amber-950/30 dark:text-amber-200">
+            <div>{err}</div>
+            <button
+              onClick={retry}
+              className="mt-2 rounded-lg border border-amber-400 px-3 py-1 text-xs hover:bg-amber-100 dark:border-amber-700 dark:hover:bg-amber-900/40"
+            >
+              Retry now
+            </button>
+          </div>
+        )}
+
         <div className="flex items-center justify-between">
           <div className="text-sm text-zinc-600 dark:text-zinc-400">Current status</div>
           <div className="rounded-full bg-zinc-200 px-3 py-1 text-xs text-zinc-900 dark:bg-zinc-900 dark:text-zinc-200">{status}</div>
@@ -64,7 +126,7 @@ export default function OrderPage() {
         </div>
 
         <div className="mt-3 text-xs text-zinc-600 dark:text-zinc-500">
-          (Mock mode) This will become real-time via WebSocket later.
+          Updates every 4 seconds while order is active.
         </div>
       </div>
     </div>

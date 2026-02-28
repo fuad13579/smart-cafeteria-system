@@ -47,6 +47,13 @@ export interface MenuItem {
   available: boolean;
 }
 
+export type OrderStatus =
+  | "QUEUED"
+  | "IN_PROGRESS"
+  | "READY"
+  | "COMPLETED"
+  | "CANCELLED";
+
 interface LoginResponse {
   access_token: string;
   user: {
@@ -61,6 +68,42 @@ interface MenuResponse {
 
 interface OrderResponse {
   order_id: string;
+  status: OrderStatus;
+  eta_minutes: number;
+}
+
+export interface OrderDetails {
+  order_id: string;
+  status: OrderStatus;
+  eta_minutes: number;
+  student_id?: string;
+  total_amount?: number;
+  created_at?: string;
+}
+
+function parseApiErrorMessage(raw: any, status: number): string {
+  if (raw?.message && typeof raw.message === "string") return raw.message;
+  if (raw?.detail && typeof raw.detail === "string") return raw.detail;
+  if (raw?.error && typeof raw.error === "string") return raw.error;
+  return `HTTP ${status}`;
+}
+
+function mockOrderFromId(orderId: string): OrderDetails {
+  const seed = Number.parseInt(orderId, 10);
+  const now = Date.now();
+  const base = Number.isFinite(seed) ? seed : now - 5000;
+  const ageSec = Math.max(0, Math.floor((now - base) / 1000));
+
+  if (ageSec < 8) {
+    return { order_id: orderId, status: "QUEUED", eta_minutes: 12 };
+  }
+  if (ageSec < 16) {
+    return { order_id: orderId, status: "IN_PROGRESS", eta_minutes: 7 };
+  }
+  if (ageSec < 24) {
+    return { order_id: orderId, status: "READY", eta_minutes: 0 };
+  }
+  return { order_id: orderId, status: "COMPLETED", eta_minutes: 0 };
 }
 
 async function makeMockRequest<T>(
@@ -99,7 +142,14 @@ async function makeMockRequest<T>(
   if (method === "POST" && endpoint === "/orders") {
     return {
       order_id: String(Date.now()),
+      status: "QUEUED",
+      eta_minutes: 12,
     } as T;
+  }
+
+  if (method === "GET" && endpoint.startsWith("/orders/")) {
+    const orderId = endpoint.split("/").pop() || String(Date.now());
+    return mockOrderFromId(orderId) as T;
   }
 
   throw new Error(`Mock endpoint not implemented: ${method} ${endpoint}`);
@@ -131,7 +181,7 @@ async function makeRequest<T>(
 
   if (!response.ok) {
     const error = await response.json().catch(() => ({}));
-    throw new Error(error.message || `HTTP ${response.status}`);
+    throw new Error(parseApiErrorMessage(error, response.status));
   }
 
   return response.json();
@@ -157,4 +207,8 @@ export async function createOrder(
   return makeRequest<OrderResponse>("POST", "/orders", {
     items,
   });
+}
+
+export async function getOrder(orderId: string): Promise<OrderDetails> {
+  return makeRequest<OrderDetails>("GET", `/orders/${orderId}`);
 }

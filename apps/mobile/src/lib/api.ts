@@ -1,3 +1,5 @@
+import * as SecureStore from "expo-secure-store";
+
 type ApiMode = "mock" | "real";
 type MockScenario = "success" | "timeout" | "unauthorized" | "server_error";
 
@@ -15,7 +17,16 @@ const API_MOCK_SCENARIO: MockScenario =
 const API_MOCK_DELAY_MS = Number(process.env.EXPO_PUBLIC_API_MOCK_DELAY_MS ?? 350);
 
 export type MenuItem = { id: string; name: string; price: number; available: boolean };
-export type OrderResp = { order_id: string; status: string; eta_minutes: number };
+export type OrderStatus = "QUEUED" | "IN_PROGRESS" | "READY" | "COMPLETED" | "CANCELLED";
+export type OrderResp = { order_id: string; status: OrderStatus; eta_minutes: number };
+export type OrderDetails = {
+  order_id: string;
+  status: OrderStatus;
+  eta_minutes: number;
+  student_id?: string;
+  total_amount?: number;
+  created_at?: string;
+};
 
 function sleep(ms: number) {
   return new Promise((r) => setTimeout(r, ms));
@@ -39,6 +50,37 @@ function buildMockError(endpoint: string): Error {
     return new Error(`Internal server error (500) (${endpoint}) [mock]`);
   }
   return new Error(`Unknown mock error (${endpoint})`);
+}
+
+function mockOrderFromId(orderId: string): OrderDetails {
+  const seed = Number.parseInt(orderId, 10);
+  const now = Date.now();
+  const base = Number.isFinite(seed) ? seed : now - 5000;
+  const ageSec = Math.max(0, Math.floor((now - base) / 1000));
+
+  if (ageSec < 8) {
+    return { order_id: orderId, status: "QUEUED", eta_minutes: 12 };
+  }
+  if (ageSec < 16) {
+    return { order_id: orderId, status: "IN_PROGRESS", eta_minutes: 7 };
+  }
+  if (ageSec < 24) {
+    return { order_id: orderId, status: "READY", eta_minutes: 0 };
+  }
+  return { order_id: orderId, status: "COMPLETED", eta_minutes: 0 };
+}
+
+function parseApiErrorMessage(raw: any, fallback: string): string {
+  if (raw?.message && typeof raw.message === "string") return raw.message;
+  if (raw?.detail && typeof raw.detail === "string") return raw.detail;
+  if (raw?.error && typeof raw.error === "string") return raw.error;
+  return fallback;
+}
+
+async function getAuthHeaders(): Promise<Record<string, string>> {
+  const token = await SecureStore.getItemAsync("sc_token");
+  if (!token) return {};
+  return { Authorization: `Bearer ${token}` };
 }
 
 export async function apiLogin(student_id: string, _password: string) {
@@ -85,11 +127,35 @@ export async function apiCreateOrder(items: { id: string; qty: number }[]): Prom
     }
     return { order_id: String(Date.now()), status: "QUEUED", eta_minutes: 12 };
   }
+  const auth = await getAuthHeaders();
   const res = await fetch(resolveUrl("/orders"), {
     method: "POST",
-    headers: { "Content-Type": "application/json" },
+    headers: { "Content-Type": "application/json", ...auth },
     body: JSON.stringify({ items }),
   });
-  if (!res.ok) throw new Error("Order failed");
+  if (!res.ok) {
+    const err = await res.json().catch(() => ({}));
+    throw new Error(parseApiErrorMessage(err, "Order failed"));
+  }
+  return res.json();
+}
+
+export async function apiGetOrder(orderId: string): Promise<OrderDetails> {
+  if (API_MODE === "mock") {
+    await sleep(API_MOCK_DELAY_MS);
+    if (API_MOCK_SCENARIO !== "success") {
+      throw buildMockError(`/orders/${orderId}`);
+    }
+    return mockOrderFromId(orderId);
+  }
+
+  const auth = await getAuthHeaders();
+  const res = await fetch(resolveUrl(`/orders/${orderId}`), {
+    headers: { ...auth },
+  });
+  if (!res.ok) {
+    const err = await res.json().catch(() => ({}));
+    throw new Error(parseApiErrorMessage(err, "Failed to load order status"));
+  }
   return res.json();
 }
