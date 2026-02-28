@@ -10,6 +10,7 @@ from zoneinfo import ZoneInfo
 import httpx
 import pika
 import psycopg
+import redis
 from fastapi import Cookie, FastAPI, Header, HTTPException, Query, Response
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
@@ -38,19 +39,28 @@ latency_samples_ms: list[float] = []
 service_started_at = time.time()
 
 chaos_state = {"enabled": False, "mode": "error"}
-stock_cache: dict[str, tuple[float, bool]] = {}
-stock_cache_lock = threading.Lock()
 outbox_worker_state = {"running": True}
+cache_worker_state = {"running": True}
 ACCESS_COOKIE_NAME = os.getenv("ACCESS_COOKIE_NAME", "access_token")
+redis_client: redis.Redis | None = None
 
 
-def _stock_cache_ttl_seconds() -> float:
+def _stock_cache_ttl_seconds() -> int:
     raw = os.getenv("STOCK_CACHE_TTL_SECONDS", "3")
     try:
-        value = float(raw)
-        return value if value > 0 else 3.0
+        value = int(float(raw))
+        return value if value > 0 else 3
     except ValueError:
-        return 3.0
+        return 3
+
+
+def _menu_cache_ttl_seconds() -> int:
+    raw = os.getenv("MENU_CACHE_TTL_SECONDS", "60")
+    try:
+        value = int(raw)
+        return value if value > 0 else 60
+    except ValueError:
+        return 60
 
 
 def _jwt_exp_minutes() -> int:
@@ -99,6 +109,97 @@ def _rabbit_params() -> pika.ConnectionParameters:
     host = os.getenv("RABBITMQ_HOST", "rabbitmq")
     port = int(os.getenv("RABBITMQ_PORT", "5672"))
     return pika.ConnectionParameters(host=host, port=port)
+
+
+def _redis_url() -> str:
+    return os.getenv("REDIS_URL", "redis://redis:6379/0")
+
+
+def _init_redis() -> None:
+    global redis_client
+    try:
+        client = redis.Redis.from_url(_redis_url(), decode_responses=True)
+        client.ping()
+        redis_client = client
+    except Exception:
+        redis_client = None
+
+
+def _close_redis() -> None:
+    global redis_client
+    if redis_client is not None:
+        try:
+            redis_client.close()
+        except Exception:
+            pass
+    redis_client = None
+
+
+def _cache_get_json(key: str) -> Any | None:
+    if redis_client is None:
+        return None
+    try:
+        raw = redis_client.get(key)
+        if not raw:
+            return None
+        return json.loads(raw)
+    except Exception:
+        return None
+
+
+def _cache_set_json(key: str, data: Any, ttl_seconds: int) -> None:
+    if redis_client is None:
+        return
+    try:
+        redis_client.setex(key, ttl_seconds, json.dumps(data, default=str))
+    except Exception:
+        pass
+
+
+def _cache_get_text(key: str) -> str | None:
+    if redis_client is None:
+        return None
+    try:
+        return redis_client.get(key)
+    except Exception:
+        return None
+
+
+def _cache_set_text(key: str, value: str, ttl_seconds: int) -> None:
+    if redis_client is None:
+        return
+    try:
+        redis_client.setex(key, ttl_seconds, value)
+    except Exception:
+        pass
+
+
+def _cache_del_key(key: str) -> None:
+    if redis_client is None:
+        return
+    try:
+        redis_client.delete(key)
+    except Exception:
+        pass
+
+
+def _cache_del_pattern(pattern: str) -> None:
+    if redis_client is None:
+        return
+    try:
+        keys = list(redis_client.scan_iter(match=pattern, count=100))
+        if keys:
+            redis_client.delete(*keys)
+    except Exception:
+        pass
+
+
+def _stock_zero_cache_key(item_id: str) -> str:
+    return f"stock:zero:{item_id}:v1"
+
+
+def _menu_cache_key(context: str) -> str:
+    return f"menu:{context}:v1"
 
 
 def _should_fail() -> None:
@@ -408,16 +509,13 @@ def _reserve_item(order_id: str, item_id: str, qty: int) -> None:
 
 
 def _invalidate_stock_cache(item_id: str) -> None:
-    with stock_cache_lock:
-        stock_cache.pop(item_id, None)
+    _cache_del_key(_stock_zero_cache_key(item_id))
 
 
 def _is_stock_available_cached(item_id: str) -> bool:
-    now = time.time()
-    with stock_cache_lock:
-        row = stock_cache.get(item_id)
-        if row and row[0] > now:
-            return row[1]
+    # Fast reject using short-lived negative cache.
+    if _cache_get_text(_stock_zero_cache_key(item_id)) == "1":
+        return False
 
     try:
         with httpx.Client(timeout=1.0) as client:
@@ -432,8 +530,12 @@ def _is_stock_available_cached(item_id: str) -> bool:
 
     body = resp.json()
     is_available = bool(body.get("available", False))
-    with stock_cache_lock:
-        stock_cache[item_id] = (now + _stock_cache_ttl_seconds(), is_available)
+    stock_quantity = int(body.get("stock_quantity", 0))
+    if not is_available or stock_quantity <= 0:
+        _cache_set_text(_stock_zero_cache_key(item_id), "1", _stock_cache_ttl_seconds())
+        return False
+
+    _cache_del_key(_stock_zero_cache_key(item_id))
     return is_available
 
 
@@ -464,6 +566,51 @@ def _publish_queue(queue_name: str, payload: dict[str, Any]) -> None:
         properties=pika.BasicProperties(delivery_mode=2),
     )
     connection.close()
+
+
+def _publish_cache_invalidation(event: str, item_id: str | None = None) -> None:
+    payload: dict[str, Any] = {"event": event, "ts": int(time.time())}
+    if item_id:
+        payload["item_id"] = item_id
+    try:
+        _publish_queue("cache.invalidate", payload)
+    except Exception:
+        # Best effort: cache is an optimization, not correctness source.
+        pass
+
+
+def _process_cache_event(event: dict[str, Any]) -> None:
+    event_name = str(event.get("event", "")).strip().lower()
+    if event_name == "menu.updated":
+        _cache_del_pattern("menu:*")
+        return
+    if event_name == "stock.changed":
+        item_id = str(event.get("item_id", "")).strip()
+        if item_id:
+            _cache_del_key(_stock_zero_cache_key(item_id))
+
+
+def _cache_invalidator_loop() -> None:
+    while cache_worker_state["running"]:
+        try:
+            connection = pika.BlockingConnection(_rabbit_params())
+            channel = connection.channel()
+            channel.queue_declare(queue="cache.invalidate", durable=True)
+            for method, _, body in channel.consume("cache.invalidate", inactivity_timeout=1.0):
+                if not cache_worker_state["running"]:
+                    break
+                if method is None:
+                    continue
+                try:
+                    payload = json.loads(body.decode("utf-8")) if isinstance(body, (bytes, bytearray)) else {}
+                    if isinstance(payload, dict):
+                        _process_cache_event(payload)
+                finally:
+                    channel.basic_ack(method.delivery_tag)
+            channel.cancel()
+            connection.close()
+        except Exception:
+            time.sleep(1.0)
 
 
 def _ensure_outbox_schema() -> None:
@@ -737,13 +884,17 @@ def get_admin_metrics():
 
 @app.on_event("startup")
 def on_startup():
+    _init_redis()
     _ensure_outbox_schema()
     threading.Thread(target=_outbox_worker_loop, daemon=True).start()
+    threading.Thread(target=_cache_invalidator_loop, daemon=True).start()
 
 
 @app.on_event("shutdown")
 def on_shutdown():
     outbox_worker_state["running"] = False
+    cache_worker_state["running"] = False
+    _close_redis()
 
 
 @app.post("/chaos/fail")
@@ -810,6 +961,7 @@ def admin_create_menu_item(
             )
             row = cur.fetchone()
             conn.commit()
+    _publish_cache_invalidation("menu.updated", item_id=item_id)
     return {
         "item": {
             "id": row[0],
@@ -847,6 +999,7 @@ def admin_update_menu_item(
                 raise HTTPException(status_code=404, detail="Menu item not found")
             conn.commit()
     _invalidate_stock_cache(item_id)
+    _publish_cache_invalidation("menu.updated", item_id=item_id)
     return {
         "item": {
             "id": row[0],
@@ -884,6 +1037,7 @@ def admin_patch_menu_item_availability(
                 raise HTTPException(status_code=404, detail="Menu item not found")
             conn.commit()
     _invalidate_stock_cache(item_id)
+    _publish_cache_invalidation("menu.updated", item_id=item_id)
     return {
         "item": {
             "id": row[0],
@@ -965,6 +1119,7 @@ def admin_create_menu_window(
             )
             row = cur.fetchone()
             conn.commit()
+    _publish_cache_invalidation("menu.updated")
     return {
         "window": {
             "id": int(row[0]),
@@ -1016,6 +1171,7 @@ def admin_update_menu_window(
             if not row:
                 raise HTTPException(status_code=404, detail="Window not found")
             conn.commit()
+    _publish_cache_invalidation("menu.updated")
     return {
         "window": {
             "id": int(row[0]),
@@ -1046,6 +1202,7 @@ def admin_delete_menu_window(
             conn.commit()
     if deleted == 0:
         raise HTTPException(status_code=404, detail="Window not found")
+    _publish_cache_invalidation("menu.updated")
     return {"ok": True, "window_id": window_id}
 
 
@@ -1087,6 +1244,7 @@ def admin_assign_window_items(
                     (window_id, item_id),
                 )
             conn.commit()
+    _publish_cache_invalidation("menu.updated")
     return {"ok": True, "window_id": window_id, "item_ids": unique_ids}
 
 
@@ -1202,11 +1360,24 @@ def get_menu(
 
     if requested == "auto":
         active_context, next_change_at = _resolve_auto_context(now_local)
-        items = _get_context_items(active_context, now_local)
     else:
         active_context = requested
         next_change_at = None
+
+    cache_key = _menu_cache_key(active_context)
+    items = _cache_get_json(cache_key)
+    if not isinstance(items, list):
         items = _get_context_items(active_context, now_local)
+        ttl_seconds = _menu_cache_ttl_seconds()
+        if next_change_at:
+            try:
+                next_dt = datetime.fromisoformat(next_change_at)
+                seconds_until_change = int((next_dt - now_local).total_seconds())
+                if seconds_until_change > 0:
+                    ttl_seconds = min(ttl_seconds, seconds_until_change)
+            except Exception:
+                pass
+        _cache_set_json(cache_key, items, max(ttl_seconds, 1))
 
     return {
         "active_context": active_context,

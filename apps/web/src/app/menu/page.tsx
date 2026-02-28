@@ -3,9 +3,11 @@
 import { useEffect, useMemo, useState } from "react";
 import { getMenu, type MenuContext, type MenuItem } from "@/lib/api";
 import { getCart, setCart, type CartLine } from "@/lib/storage";
+import { useToast } from "@/components/ToastProvider";
 import Link from "next/link";
 
 export default function MenuPage() {
+  const { showToast } = useToast();
   const [items, setItems] = useState<MenuItem[]>([]);
   const [context, setContext] = useState<MenuContext>("auto");
   const [activeContext, setActiveContext] = useState<"regular" | "iftar" | "saheri">("regular");
@@ -45,6 +47,7 @@ export default function MenuPage() {
         ? cart.map((c: CartLine, i: number) => (i === idx ? { ...c, qty: c.qty + 1 } : c))
         : [...cart, { id: item.id, name: item.name, price: item.price, qty: 1, available: item.available }];
     setCart(next);
+    showToast(`${item.name} added to cart`, "success");
   };
 
   return (

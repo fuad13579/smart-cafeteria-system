@@ -37,7 +37,7 @@ export default function OrdersPage() {
   return (
     <div>
       <h1 className="text-2xl font-semibold text-zinc-900 dark:text-white">My Orders</h1>
-      <p className="mt-2 text-sm text-zinc-600 dark:text-zinc-400">Reload-safe order history from backend.</p>
+      <p className="mt-2 text-sm text-zinc-600 dark:text-zinc-400">Order History</p>
 
       {loading && <div className="mt-4 text-sm text-zinc-600 dark:text-zinc-400">Loading orders…</div>}
       {err && (

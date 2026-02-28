@@ -1,7 +1,9 @@
+import json
 import os
 import time
 from typing import Any
 
+import pika
 import psycopg
 import redis
 from fastapi import FastAPI, HTTPException
@@ -35,6 +37,32 @@ def _redis_client():
         port=int(os.getenv("REDIS_PORT", "6379")),
         decode_responses=True,
     )
+
+
+def _rabbit_params() -> pika.ConnectionParameters:
+    host = os.getenv("RABBITMQ_HOST", "rabbitmq")
+    port = int(os.getenv("RABBITMQ_PORT", "5672"))
+    return pika.ConnectionParameters(host=host, port=port)
+
+
+def _publish_cache_invalidation(event: str, item_id: str | None = None) -> None:
+    payload: dict[str, Any] = {"event": event, "ts": int(time.time())}
+    if item_id:
+        payload["item_id"] = item_id
+    try:
+        connection = pika.BlockingConnection(_rabbit_params())
+        channel = connection.channel()
+        channel.queue_declare(queue="cache.invalidate", durable=True)
+        channel.basic_publish(
+            exchange="",
+            routing_key="cache.invalidate",
+            body=json.dumps(payload),
+            properties=pika.BasicProperties(delivery_mode=2),
+        )
+        connection.close()
+    except Exception:
+        # Best effort only; stock correctness depends on DB locks/transactions.
+        pass
 
 
 def _should_fail() -> None:
@@ -73,12 +101,13 @@ def health():
     except Exception as exc:
         raise HTTPException(status_code=503, detail=f"database unavailable: {exc}")
 
+    redis_ok = True
     try:
         _redis_client().ping()
-    except Exception as exc:
-        raise HTTPException(status_code=503, detail=f"redis unavailable: {exc}")
+    except Exception:
+        redis_ok = False
 
-    return {"status": "ok"}
+    return {"status": "ok", "redis_cache": "ok" if redis_ok else "degraded"}
 
 
 @app.get("/metrics")
@@ -120,9 +149,19 @@ def reserve_stock(payload: ReserveRequest):
         metrics["reserve_failed_total"] += 1
         raise HTTPException(status_code=422, detail="qty must be positive")
 
-    rc = _redis_client()
+    rc = None
+    try:
+        rc = _redis_client()
+    except Exception:
+        rc = None
     lock_key = f"lock:reserve:{payload.order_id}:{payload.item_id}"
-    got_lock = rc.set(lock_key, "1", ex=10, nx=True)
+    got_lock = True
+    if rc is not None:
+        try:
+            got_lock = bool(rc.set(lock_key, "1", ex=10, nx=True))
+        except Exception:
+            # Redis lock degraded; continue with DB transactional lock as source of truth.
+            got_lock = True
     if not got_lock:
         metrics["reserve_failed_total"] += 1
         raise HTTPException(status_code=409, detail="Reservation already in progress")
@@ -180,6 +219,7 @@ def reserve_stock(payload: ReserveRequest):
                     (payload.order_id, payload.item_id, payload.qty),
                 )
                 conn.commit()
+                _publish_cache_invalidation("stock.changed", item_id=payload.item_id)
 
         return {
             "reserved": True,
@@ -189,7 +229,11 @@ def reserve_stock(payload: ReserveRequest):
             "qty": payload.qty,
         }
     finally:
-        rc.delete(lock_key)
+        if rc is not None:
+            try:
+                rc.delete(lock_key)
+            except Exception:
+                pass
 
 
 @app.post("/stock/release")
@@ -223,6 +267,7 @@ def release_stock(payload: ReleaseRequest):
                     """,
                     (qty, item_id),
                 )
+                _publish_cache_invalidation("stock.changed", item_id=str(item_id))
 
             cur.execute(
                 "UPDATE stock_reservations SET status = 'RELEASED' WHERE order_id = %s AND status = 'RESERVED'",

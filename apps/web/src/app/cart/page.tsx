@@ -3,11 +3,13 @@
 import { useMemo, useState } from "react";
 import { clearCart, getCart, setCart, type CartLine } from "@/lib/storage";
 import { createOrder } from "@/lib/api";
+import { useToast } from "@/components/ToastProvider";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
 
 export default function CartPage() {
   const router = useRouter();
+  const { showToast } = useToast();
   const [lines, setLines] = useState(() => getCart());
   const [busy, setBusy] = useState(false);
   const [err, setErr] = useState<string | null>(null);
@@ -36,6 +38,7 @@ export default function CartPage() {
       const payload = lines.map((l: CartLine) => ({ id: l.id, qty: l.qty }));
       const res = await createOrder(payload);
       clearCart();
+      showToast(`Payment successful. Order ${res.order_id} created`, "success");
       router.push(`/orders/${res.order_id}`);
     } catch (e: any) {
       setErr(e?.message ?? "Order failed");
