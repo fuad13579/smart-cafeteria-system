@@ -80,9 +80,13 @@ if [[ "$menu_code" != "200" ]]; then
   echo "$menu_body"
   exit 1
 fi
-first_item_id="$(echo "$menu_body" | python3 -c 'import json,sys; d=json.loads(sys.stdin.read()); items=d.get("items",[]); print(items[0]["id"] if items else "")')"
+first_item_id="$(echo "$menu_body" | python3 -c 'import json,sys
+d=json.loads(sys.stdin.read())
+items=d.get("items", [])
+available=[i for i in items if i.get("available") is True]
+print((available[0] if available else {}).get("id",""))')"
 if [[ -z "$first_item_id" ]]; then
-  echo "Menu has no items"
+  echo "Menu has no available items"
   echo "$menu_body"
   exit 1
 fi

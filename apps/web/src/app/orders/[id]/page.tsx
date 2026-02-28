@@ -2,6 +2,7 @@
 
 import { useEffect, useState } from "react";
 import Link from "next/link";
+import { useParams } from "next/navigation";
 
 const steps = ["QUEUED", "IN_PROGRESS", "READY", "COMPLETED"] as const;
 
@@ -14,7 +15,8 @@ function Step({ label, active }: { label: string; active: boolean }) {
   );
 }
 
-export default function OrderPage({ params }: { params: { id: string } }) {
+export default function OrderPage() {
+  const params = useParams<{ id: string }>();
   const [status, setStatus] = useState<(typeof steps)[number]>("QUEUED");
   const [eta, setEta] = useState<number>(12);
 
