@@ -13,6 +13,14 @@ type MetricsResp = {
   updatedAt: string;
 };
 
+type AdminMenuItem = {
+  id: string;
+  name: string;
+  price: number;
+  stock_quantity: number;
+  available: boolean;
+};
+
 function Badge({ status }: { status: Service["status"] }) {
   const cls =
     status === "up"
@@ -44,8 +52,27 @@ export function AdminDashboardClient() {
 
   const [targetService, setTargetService] = useState("order-gateway");
   const [action, setAction] = useState<"kill" | "restart">("kill");
+  const [menuItems, setMenuItems] = useState<AdminMenuItem[]>([]);
+  const [menuBusy, setMenuBusy] = useState(false);
+  const [menuMessage, setMenuMessage] = useState<string | null>(null);
+  const [selectedId, setSelectedId] = useState<string>("");
+  const [itemName, setItemName] = useState("");
+  const [itemPrice, setItemPrice] = useState("0");
+  const [itemStock, setItemStock] = useState("0");
+  const [itemAvailable, setItemAvailable] = useState(true);
 
   const services = useMemo(() => health?.services ?? [], [health]);
+
+  async function loadMenu() {
+    try {
+      const res = await fetch("/api/admin/menu", { cache: "no-store" });
+      const data = await res.json();
+      if (!res.ok) throw new Error(data?.detail ?? data?.error ?? "Failed to load menu");
+      setMenuItems(data.items ?? []);
+    } catch (e: any) {
+      setMenuMessage(e?.message ?? "Failed to load menu");
+    }
+  }
 
   useEffect(() => {
     let alive = true;
@@ -65,6 +92,7 @@ export function AdminDashboardClient() {
     }
 
     refresh();
+    loadMenu();
     const t = setInterval(refresh, 2000);
     return () => {
       alive = false;
@@ -90,6 +118,86 @@ export function AdminDashboardClient() {
       setTimeout(() => setToast(null), 2000);
     } finally {
       setBusy(false);
+    }
+  };
+
+  const clearForm = () => {
+    setSelectedId("");
+    setItemName("");
+    setItemPrice("0");
+    setItemStock("0");
+    setItemAvailable(true);
+  };
+
+  const onCreateMenuItem = async () => {
+    setMenuBusy(true);
+    setMenuMessage(null);
+    try {
+      const res = await fetch("/api/admin/menu", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          name: itemName,
+          price: Number(itemPrice),
+          stock_quantity: Number(itemStock),
+          available: itemAvailable,
+        }),
+      });
+      const data = await res.json();
+      if (!res.ok) throw new Error(data?.detail ?? data?.error ?? "Create failed");
+      setMenuMessage("Menu item created");
+      clearForm();
+      await loadMenu();
+    } catch (e: any) {
+      setMenuMessage(e?.message ?? "Create failed");
+    } finally {
+      setMenuBusy(false);
+    }
+  };
+
+  const onUpdateMenuItem = async () => {
+    if (!selectedId) return;
+    setMenuBusy(true);
+    setMenuMessage(null);
+    try {
+      const res = await fetch(`/api/admin/menu/${selectedId}`, {
+        method: "PUT",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          name: itemName,
+          price: Number(itemPrice),
+          stock_quantity: Number(itemStock),
+          available: itemAvailable,
+        }),
+      });
+      const data = await res.json();
+      if (!res.ok) throw new Error(data?.detail ?? data?.error ?? "Update failed");
+      setMenuMessage("Menu item updated");
+      await loadMenu();
+    } catch (e: any) {
+      setMenuMessage(e?.message ?? "Update failed");
+    } finally {
+      setMenuBusy(false);
+    }
+  };
+
+  const onToggleAvailability = async (item: AdminMenuItem) => {
+    setMenuBusy(true);
+    setMenuMessage(null);
+    try {
+      const res = await fetch(`/api/admin/menu/${item.id}`, {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ available: !item.available }),
+      });
+      const data = await res.json();
+      if (!res.ok) throw new Error(data?.detail ?? data?.error ?? "Toggle failed");
+      setMenuMessage(`Item ${item.id} updated`);
+      await loadMenu();
+    } catch (e: any) {
+      setMenuMessage(e?.message ?? "Toggle failed");
+    } finally {
+      setMenuBusy(false);
     }
   };
 
@@ -202,6 +310,120 @@ export function AdminDashboardClient() {
             {toast}
           </div>
         )}
+      </div>
+
+      <div className="mt-6 rounded-2xl border border-zinc-200 bg-zinc-50 p-4 dark:border-zinc-900 dark:bg-zinc-950">
+        <div className="text-sm font-medium">Menu Manager</div>
+        <p className="mt-2 text-sm text-zinc-600 dark:text-zinc-400">
+          Add, edit, and toggle menu items for daily updates.
+        </p>
+
+        <div className="mt-4 grid grid-cols-1 gap-3 sm:grid-cols-4">
+          <input
+            value={itemName}
+            onChange={(e) => setItemName(e.target.value)}
+            placeholder="Item name"
+            className="rounded-xl border border-zinc-300 bg-white px-3 py-2 text-sm text-zinc-900 outline-none focus:border-zinc-500 dark:border-zinc-800 dark:bg-zinc-950 dark:text-zinc-100 dark:focus:border-zinc-600"
+          />
+          <input
+            value={itemPrice}
+            onChange={(e) => setItemPrice(e.target.value)}
+            placeholder="Price"
+            type="number"
+            min={0}
+            className="rounded-xl border border-zinc-300 bg-white px-3 py-2 text-sm text-zinc-900 outline-none focus:border-zinc-500 dark:border-zinc-800 dark:bg-zinc-950 dark:text-zinc-100 dark:focus:border-zinc-600"
+          />
+          <input
+            value={itemStock}
+            onChange={(e) => setItemStock(e.target.value)}
+            placeholder="Stock"
+            type="number"
+            min={0}
+            className="rounded-xl border border-zinc-300 bg-white px-3 py-2 text-sm text-zinc-900 outline-none focus:border-zinc-500 dark:border-zinc-800 dark:bg-zinc-950 dark:text-zinc-100 dark:focus:border-zinc-600"
+          />
+          <label className="flex items-center gap-2 rounded-xl border border-zinc-300 bg-white px-3 py-2 text-sm text-zinc-900 dark:border-zinc-800 dark:bg-zinc-950 dark:text-zinc-100">
+            <input type="checkbox" checked={itemAvailable} onChange={(e) => setItemAvailable(e.target.checked)} />
+            Available
+          </label>
+        </div>
+
+        <div className="mt-3 flex flex-wrap gap-2">
+          <button
+            onClick={onCreateMenuItem}
+            disabled={menuBusy || !itemName.trim()}
+            className="rounded-xl bg-zinc-900 px-4 py-2 text-sm font-medium text-white hover:bg-zinc-800 disabled:opacity-60"
+          >
+            Add item
+          </button>
+          <button
+            onClick={onUpdateMenuItem}
+            disabled={menuBusy || !selectedId}
+            className="rounded-xl border border-zinc-300 px-4 py-2 text-sm text-zinc-900 hover:bg-zinc-100 disabled:opacity-60 dark:border-zinc-800 dark:text-zinc-100 dark:hover:bg-zinc-900"
+          >
+            Save selected
+          </button>
+          <button
+            onClick={clearForm}
+            disabled={menuBusy}
+            className="rounded-xl border border-zinc-300 px-4 py-2 text-sm text-zinc-900 hover:bg-zinc-100 disabled:opacity-60 dark:border-zinc-800 dark:text-zinc-100 dark:hover:bg-zinc-900"
+          >
+            Clear
+          </button>
+        </div>
+
+        {menuMessage && (
+          <div className="mt-3 rounded-xl border border-zinc-300 bg-white px-3 py-2 text-sm text-zinc-700 dark:border-zinc-800 dark:bg-zinc-950 dark:text-zinc-200">
+            {menuMessage}
+          </div>
+        )}
+
+        <div className="mt-4 overflow-x-auto">
+          <table className="w-full text-sm">
+            <thead>
+              <tr className="text-left text-zinc-600 dark:text-zinc-400">
+                <th className="py-2 pr-3">ID</th>
+                <th className="py-2 pr-3">Name</th>
+                <th className="py-2 pr-3">Price</th>
+                <th className="py-2 pr-3">Stock</th>
+                <th className="py-2 pr-3">Status</th>
+                <th className="py-2 pr-3">Actions</th>
+              </tr>
+            </thead>
+            <tbody>
+              {menuItems.map((item) => (
+                <tr key={item.id} className="border-t border-zinc-200 dark:border-zinc-900">
+                  <td className="py-2 pr-3">{item.id}</td>
+                  <td className="py-2 pr-3">{item.name}</td>
+                  <td className="py-2 pr-3">{item.price}</td>
+                  <td className="py-2 pr-3">{item.stock_quantity}</td>
+                  <td className="py-2 pr-3">{item.available ? "Available" : "Hidden"}</td>
+                  <td className="py-2 pr-3">
+                    <div className="flex flex-wrap gap-2">
+                      <button
+                        onClick={() => {
+                          setSelectedId(item.id);
+                          setItemName(item.name);
+                          setItemPrice(String(item.price));
+                          setItemStock(String(item.stock_quantity));
+                          setItemAvailable(item.available);
+                        }}
+                        className="rounded-lg border border-zinc-300 px-2 py-1 text-xs hover:bg-zinc-100 dark:border-zinc-800 dark:hover:bg-zinc-900"
+                      >
+                        Edit
+                      </button>
+                      <button
+                        onClick={() => onToggleAvailability(item)}
+                        className="rounded-lg border border-zinc-300 px-2 py-1 text-xs hover:bg-zinc-100 dark:border-zinc-800 dark:hover:bg-zinc-900"
+                      >
+                        {item.available ? "Hide" : "Show"}
+                      </button>
+                    </div>
+                  </td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
       </div>
     </div>
   );

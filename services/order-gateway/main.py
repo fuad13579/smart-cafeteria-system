@@ -123,6 +123,25 @@ class ChaosRequest(BaseModel):
     mode: str = "error"
 
 
+class AdminMenuCreateRequest(BaseModel):
+    id: str | None = None
+    name: str
+    price: int = Field(ge=0)
+    stock_quantity: int = Field(ge=0)
+    available: bool = True
+
+
+class AdminMenuUpdateRequest(BaseModel):
+    name: str
+    price: int = Field(ge=0)
+    stock_quantity: int = Field(ge=0)
+    available: bool
+
+
+class AdminMenuAvailabilityRequest(BaseModel):
+    available: bool
+
+
 def _extract_token(authorization: str | None, cookie_token: str | None) -> str | None:
     if authorization and authorization.startswith("Bearer "):
         token = authorization.split(" ", 1)[1].strip()
@@ -163,6 +182,15 @@ def _extract_auth(authorization: str | None, cookie_token: str | None) -> dict |
     if not isinstance(student_id, str) or not student_id:
         return None
     return {"student_id": student_id, "role": verified.get("role", "student"), "token": token}
+
+
+def _require_admin(authorization: str | None, cookie_token: str | None) -> dict[str, Any]:
+    auth = _extract_auth(authorization, cookie_token)
+    if not auth:
+        raise HTTPException(status_code=401, detail="Missing or invalid token")
+    if auth.get("role") != "admin":
+        raise HTTPException(status_code=403, detail="Admin access required")
+    return auth
 
 
 def _fetch_user(student_id: str) -> dict | None:
@@ -549,6 +577,148 @@ def chaos_fail(payload: ChaosRequest):
     chaos_state["enabled"] = payload.enabled
     chaos_state["mode"] = payload.mode if payload.mode in {"error", "timeout"} else "error"
     return {"status": "ok", "chaos": chaos_state}
+
+
+@app.get("/api/admin/menu")
+def admin_get_menu(
+    authorization: str | None = Header(default=None),
+    access_token: str | None = Cookie(default=None, alias=ACCESS_COOKIE_NAME),
+):
+    _should_fail()
+    _require_admin(authorization, access_token)
+
+    with _db_conn() as conn:
+        with conn.cursor() as cur:
+            cur.execute(
+                """
+                SELECT id, name, price, stock_quantity, available
+                FROM menu_items
+                ORDER BY id
+                """
+            )
+            rows = cur.fetchall()
+    return {
+        "items": [
+            {
+                "id": row[0],
+                "name": row[1],
+                "price": int(row[2]),
+                "stock_quantity": int(row[3]),
+                "available": bool(row[4]),
+            }
+            for row in rows
+        ]
+    }
+
+
+@app.post("/api/admin/menu")
+def admin_create_menu_item(
+    payload: AdminMenuCreateRequest,
+    authorization: str | None = Header(default=None),
+    access_token: str | None = Cookie(default=None, alias=ACCESS_COOKIE_NAME),
+):
+    _should_fail()
+    _require_admin(authorization, access_token)
+
+    item_id = (payload.id or f"m-{uuid.uuid4().hex[:8]}").strip()
+    if not item_id:
+        raise HTTPException(status_code=422, detail="id must not be empty")
+
+    with _db_conn() as conn:
+        with conn.cursor() as cur:
+            cur.execute(
+                """
+                INSERT INTO menu_items(id, name, price, stock_quantity, available)
+                VALUES (%s, %s, %s, %s, %s)
+                RETURNING id, name, price, stock_quantity, available
+                """,
+                (item_id, payload.name.strip(), payload.price, payload.stock_quantity, payload.available),
+            )
+            row = cur.fetchone()
+            conn.commit()
+    return {
+        "item": {
+            "id": row[0],
+            "name": row[1],
+            "price": int(row[2]),
+            "stock_quantity": int(row[3]),
+            "available": bool(row[4]),
+        }
+    }
+
+
+@app.put("/api/admin/menu/{item_id}")
+def admin_update_menu_item(
+    item_id: str,
+    payload: AdminMenuUpdateRequest,
+    authorization: str | None = Header(default=None),
+    access_token: str | None = Cookie(default=None, alias=ACCESS_COOKIE_NAME),
+):
+    _should_fail()
+    _require_admin(authorization, access_token)
+
+    with _db_conn() as conn:
+        with conn.cursor() as cur:
+            cur.execute(
+                """
+                UPDATE menu_items
+                SET name = %s, price = %s, stock_quantity = %s, available = %s
+                WHERE id = %s
+                RETURNING id, name, price, stock_quantity, available
+                """,
+                (payload.name.strip(), payload.price, payload.stock_quantity, payload.available, item_id),
+            )
+            row = cur.fetchone()
+            if not row:
+                raise HTTPException(status_code=404, detail="Menu item not found")
+            conn.commit()
+    _invalidate_stock_cache(item_id)
+    return {
+        "item": {
+            "id": row[0],
+            "name": row[1],
+            "price": int(row[2]),
+            "stock_quantity": int(row[3]),
+            "available": bool(row[4]),
+        }
+    }
+
+
+@app.patch("/api/admin/menu/{item_id}")
+def admin_patch_menu_item_availability(
+    item_id: str,
+    payload: AdminMenuAvailabilityRequest,
+    authorization: str | None = Header(default=None),
+    access_token: str | None = Cookie(default=None, alias=ACCESS_COOKIE_NAME),
+):
+    _should_fail()
+    _require_admin(authorization, access_token)
+
+    with _db_conn() as conn:
+        with conn.cursor() as cur:
+            cur.execute(
+                """
+                UPDATE menu_items
+                SET available = %s
+                WHERE id = %s
+                RETURNING id, name, price, stock_quantity, available
+                """,
+                (payload.available, item_id),
+            )
+            row = cur.fetchone()
+            if not row:
+                raise HTTPException(status_code=404, detail="Menu item not found")
+            conn.commit()
+    _invalidate_stock_cache(item_id)
+    return {
+        "item": {
+            "id": row[0],
+            "name": row[1],
+            "price": int(row[2]),
+            "stock_quantity": int(row[3]),
+            "available": bool(row[4]),
+        }
+    }
 
 
 @app.post("/api/login")
