@@ -84,6 +84,11 @@ def _stock_url() -> str:
     return base.rstrip("/")
 
 
+def _payment_url() -> str:
+    base = os.getenv("PAYMENT_SERVICE_URL", "http://payment-service:8000")
+    return base.rstrip("/")
+
+
 def _rabbit_params() -> pika.ConnectionParameters:
     host = os.getenv("RABBITMQ_HOST", "rabbitmq")
     port = int(os.getenv("RABBITMQ_PORT", "5672"))
@@ -110,6 +115,7 @@ class OrderLine(BaseModel):
 
 class CreateOrderRequest(BaseModel):
     items: list[OrderLine]
+    payment_method: str | None = None
 
 
 class ChaosRequest(BaseModel):
@@ -375,6 +381,40 @@ def _release_order_reservations(order_id: str) -> None:
             client.post(f"{_stock_url()}/stock/release", json=payload)
     except Exception:
         pass
+
+
+def _mark_order_cancelled(order_id: str) -> None:
+    try:
+        with _db_conn() as conn:
+            with conn.cursor() as cur:
+                cur.execute("UPDATE orders SET status = 'CANCELLED', eta_minutes = 0 WHERE id = %s", (order_id,))
+                conn.commit()
+    except Exception:
+        pass
+
+
+def _process_payment(order_id: str, student_id: str, amount: int, method: str) -> dict[str, Any]:
+    payload = {
+        "order_id": order_id,
+        "student_id": student_id,
+        "amount": amount,
+        "currency": "BDT",
+        "method": method,
+    }
+    try:
+        with httpx.Client(timeout=4.0) as client:
+            resp = client.post(f"{_payment_url()}/payments/process", json=payload)
+    except Exception as exc:
+        raise HTTPException(status_code=503, detail=f"Payment service unavailable: {exc}") from exc
+
+    if resp.status_code == 200:
+        return resp.json()
+    if resp.status_code in {404, 409, 422}:
+        detail = resp.json().get("detail", "Payment failed")
+        raise HTTPException(status_code=409, detail=f"Payment failed: {detail}")
+    if resp.status_code >= 500:
+        raise HTTPException(status_code=503, detail="Payment service failure")
+    raise HTTPException(status_code=502, detail="Unexpected payment response")
 
 
 def _percentile(values: list[float], pct: float) -> float:
@@ -661,6 +701,8 @@ def create_order(
     status_value = "QUEUED"
     eta_minutes = 12
     reservations_done = False
+    total_amount = 0
+    payment_method = (payload.payment_method or "CASH").strip().upper()
 
     try:
         with _db_conn() as conn:
@@ -684,6 +726,7 @@ def create_order(
                         return JSONResponse(status_code=400, content={"message": f"Item {line.id} not found", "error": "Bad Request"})
 
                 total = sum(menu_map[line.id]["price"] * line.qty for line in payload.items)
+                total_amount = total
 
                 # Cache-first stock pre-check before reservation call.
                 for line in payload.items:
@@ -714,23 +757,39 @@ def create_order(
                         (order_id, line.id, line.qty, unit_price),
                     )
 
-                _enqueue_outbox_event(
-                    cur=cur,
-                    event_type="order.created",
-                    queue_name="kitchen.jobs",
-                    payload={
-                        "order_id": order_id,
-                        "student_id": student_id,
-                        "status": status_value,
-                        "eta_minutes": eta_minutes,
-                    },
-                )
-
                 conn.commit()
     except Exception:
         if reservations_done:
             _release_order_reservations(order_id)
         raise
+
+    try:
+        _process_payment(
+            order_id=order_id,
+            student_id=student_id,
+            amount=total_amount,
+            method=payment_method,
+        )
+    except Exception:
+        _mark_order_cancelled(order_id)
+        if reservations_done:
+            _release_order_reservations(order_id)
+        raise
+
+    with _db_conn() as conn:
+        with conn.cursor() as cur:
+            _enqueue_outbox_event(
+                cur=cur,
+                event_type="order.created",
+                queue_name="kitchen.jobs",
+                payload={
+                    "order_id": order_id,
+                    "student_id": student_id,
+                    "status": status_value,
+                    "eta_minutes": eta_minutes,
+                },
+            )
+            conn.commit()
 
     if key:
         _store_idempotency(student_id, key, order_id)
@@ -743,7 +802,12 @@ def create_order(
     if len(latency_samples_ms) > 500:
         del latency_samples_ms[0]
 
-    return {"order_id": order_id, "status": status_value, "eta_minutes": eta_minutes}
+    return {
+        "order_id": order_id,
+        "status": status_value,
+        "eta_minutes": eta_minutes,
+        "payment_status": "COMPLETED",
+    }
 
 
 @app.get("/api/orders/{order_id}")
