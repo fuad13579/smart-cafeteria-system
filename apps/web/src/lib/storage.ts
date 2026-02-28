@@ -6,9 +6,11 @@ export interface CartLine {
   available: boolean;
 }
 
-interface User {
+export interface User {
   name: string;
   id?: string;
+  student_id?: string;
+  account_balance?: number;
 }
 
 const CART_KEY = "cafeteria:cart";
@@ -54,6 +56,12 @@ export function setToken(token: string): void {
 export function clearToken(): void {
   if (typeof window === "undefined") return;
   localStorage.removeItem(TOKEN_KEY);
+}
+
+export function clearUser(): void {
+  if (typeof window === "undefined") return;
+  localStorage.removeItem(USER_KEY);
+  window.dispatchEvent(new Event("storage"));
 }
 
 export function getUser(): User | null {

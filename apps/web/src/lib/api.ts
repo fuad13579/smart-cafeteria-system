@@ -59,6 +59,8 @@ interface LoginResponse {
   user: {
     name: string;
     id: string;
+    student_id?: string;
+    account_balance?: number;
   };
 }
 
@@ -124,6 +126,8 @@ async function makeMockRequest<T>(
       user: {
         name: "Mock User",
         id: studentId,
+        student_id: studentId,
+        account_balance: 1250,
       },
     } as T;
   }

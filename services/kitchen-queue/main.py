@@ -64,12 +64,12 @@ def _publish_status(order_id: str, from_status: str, to_status: str, eta_minutes
     connection.close()
 
 
-def _set_order_status(order_id: str, status_value: str, eta_minutes: int) -> bool:
+def _set_order_status(order_id: str, from_status: str, to_status: str, eta_minutes: int) -> bool:
     with _db_conn() as conn:
         with conn.cursor() as cur:
             cur.execute(
-                "UPDATE orders SET status = %s, eta_minutes = %s WHERE id = %s",
-                (status_value, eta_minutes, order_id),
+                "UPDATE orders SET status = %s, eta_minutes = %s WHERE id = %s AND status = %s",
+                (to_status, eta_minutes, order_id, from_status),
             )
             conn.commit()
             return cur.rowcount == 1
@@ -88,12 +88,12 @@ def _process_message(body: bytes) -> None:
         metrics["failures_total"] += 1
         return
 
-    if _set_order_status(order_id, "IN_PROGRESS", 7):
+    if _set_order_status(order_id, "QUEUED", "IN_PROGRESS", 7):
         _publish_status(order_id, "QUEUED", "IN_PROGRESS", 7)
 
     time.sleep(random.randint(3, 7))
 
-    if _set_order_status(order_id, "READY", 0):
+    if _set_order_status(order_id, "IN_PROGRESS", "READY", 0):
         _publish_status(order_id, "IN_PROGRESS", "READY", 0)
         metrics["orders_processed_total"] += 1
 

@@ -2,6 +2,7 @@ CREATE TABLE IF NOT EXISTS students (
     student_id TEXT PRIMARY KEY,
     full_name TEXT NOT NULL,
     password TEXT NOT NULL,
+    account_balance INTEGER NOT NULL DEFAULT 0 CHECK (account_balance >= 0),
     is_active BOOLEAN NOT NULL DEFAULT TRUE,
     created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
@@ -10,6 +11,7 @@ CREATE TABLE IF NOT EXISTS menu_items (
     id TEXT PRIMARY KEY,
     name TEXT NOT NULL,
     price INTEGER NOT NULL CHECK (price >= 0),
+    stock_quantity INTEGER NOT NULL DEFAULT 20 CHECK (stock_quantity >= 0),
     available BOOLEAN NOT NULL DEFAULT TRUE,
     created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
@@ -35,4 +37,23 @@ CREATE TABLE IF NOT EXISTS auth_tokens (
     token TEXT PRIMARY KEY,
     student_id TEXT NOT NULL REFERENCES students(student_id) ON DELETE CASCADE,
     created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+
+CREATE TABLE IF NOT EXISTS stock_reservations (
+    id BIGSERIAL PRIMARY KEY,
+    order_id TEXT NOT NULL,
+    item_id TEXT NOT NULL REFERENCES menu_items(id) ON DELETE CASCADE,
+    qty INTEGER NOT NULL CHECK (qty > 0),
+    status TEXT NOT NULL DEFAULT 'RESERVED' CHECK (status IN ('RESERVED', 'RELEASED')),
+    created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    UNIQUE(order_id, item_id)
+);
+
+CREATE TABLE IF NOT EXISTS order_idempotency (
+    id BIGSERIAL PRIMARY KEY,
+    student_id TEXT NOT NULL REFERENCES students(student_id) ON DELETE CASCADE,
+    idempotency_key TEXT NOT NULL,
+    order_id TEXT NOT NULL REFERENCES orders(id) ON DELETE CASCADE,
+    created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    UNIQUE(student_id, idempotency_key)
 );

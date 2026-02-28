@@ -2,9 +2,9 @@
 set -euo pipefail
 
 : "${GATEWAY_BASE_URL:=http://localhost:8002}"
-: "${ADMIN_BASE_URL:=http://localhost:3000}"
-: "${STUDENT_ID:=2100001}"
-: "${PASSWORD:=demo-pass}"
+: "${ADMIN_BASE_URL:=http://localhost:8002}"
+: "${STUDENT_ID:=240041246}"
+: "${PASSWORD:=pass123}"
 
 require_cmd() {
   if ! command -v "$1" >/dev/null 2>&1; then

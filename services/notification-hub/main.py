@@ -5,6 +5,7 @@ import threading
 import time
 from typing import Any
 
+import httpx
 import pika
 import psycopg
 from fastapi import FastAPI, HTTPException, Query, WebSocket, WebSocketDisconnect
@@ -40,6 +41,11 @@ def _rabbit_params() -> pika.ConnectionParameters:
     return pika.ConnectionParameters(host=host, port=port)
 
 
+def _identity_url() -> str:
+    base = os.getenv("IDENTITY_PROVIDER_URL", "http://identity-provider:8000")
+    return base.rstrip("/")
+
+
 class ChaosRequest(BaseModel):
     enabled: bool
     mode: str = "error"
@@ -48,10 +54,12 @@ class ChaosRequest(BaseModel):
 def _token_valid(token: str) -> bool:
     if not token:
         return False
-    with _db_conn() as conn:
-        with conn.cursor() as cur:
-            cur.execute("SELECT 1 FROM auth_tokens WHERE token = %s", (token,))
-            return cur.fetchone() is not None
+    try:
+        with httpx.Client(timeout=2.0) as client:
+            resp = client.get(f"{_identity_url()}/verify", headers={"Authorization": f"Bearer {token}"})
+            return resp.status_code == 200
+    except Exception:
+        return False
 
 
 async def _broadcast(payload: dict[str, Any]) -> None:

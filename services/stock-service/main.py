@@ -14,6 +14,8 @@ chaos_state = {"enabled": False, "mode": "error"}
 metrics: dict[str, float] = {
     "reserve_total": 0,
     "reserve_failed_total": 0,
+    "release_total": 0,
+    "release_failed_total": 0,
 }
 
 
@@ -84,6 +86,8 @@ def get_metrics():
     return {
         "reserve_total": metrics["reserve_total"],
         "reserve_failed_total": metrics["reserve_failed_total"],
+        "release_total": metrics["release_total"],
+        "release_failed_total": metrics["release_failed_total"],
     }
 
 
@@ -100,11 +104,11 @@ def get_stock(item_id: str):
 
     with _db_conn() as conn:
         with conn.cursor() as cur:
-            cur.execute("SELECT id, name, available FROM menu_items WHERE id = %s", (item_id,))
+            cur.execute("SELECT id, name, available, stock_quantity FROM menu_items WHERE id = %s", (item_id,))
             row = cur.fetchone()
             if not row:
                 raise HTTPException(status_code=404, detail="Item not found")
-            return {"id": row[0], "name": row[1], "available": bool(row[2])}
+            return {"id": row[0], "name": row[1], "available": bool(row[2]), "stock_quantity": int(row[3])}
 
 
 @app.post("/stock/reserve")
@@ -117,49 +121,113 @@ def reserve_stock(payload: ReserveRequest):
         raise HTTPException(status_code=422, detail="qty must be positive")
 
     rc = _redis_client()
-    existing_item = rc.get(f"reserve:{payload.order_id}")
-    if existing_item:
-        if existing_item == payload.item_id:
-            return {"reserved": True, "already_reserved": True, "order_id": payload.order_id, "item_id": payload.item_id}
+    lock_key = f"lock:reserve:{payload.order_id}:{payload.item_id}"
+    got_lock = rc.set(lock_key, "1", ex=10, nx=True)
+    if not got_lock:
         metrics["reserve_failed_total"] += 1
-        raise HTTPException(status_code=409, detail="Order already reserved for another item")
+        raise HTTPException(status_code=409, detail="Reservation already in progress")
 
-    with _db_conn() as conn:
-        with conn.cursor() as cur:
-            cur.execute("SELECT available FROM menu_items WHERE id = %s", (payload.item_id,))
-            row = cur.fetchone()
-            if not row:
-                metrics["reserve_failed_total"] += 1
-                raise HTTPException(status_code=404, detail="Item not found")
-            if not bool(row[0]):
-                metrics["reserve_failed_total"] += 1
-                raise HTTPException(status_code=409, detail="Item unavailable")
+    try:
+        with _db_conn() as conn:
+            with conn.cursor() as cur:
+                # Idempotency: same order+item repeated should not deduct again.
+                cur.execute(
+                    """
+                    SELECT qty, status
+                    FROM stock_reservations
+                    WHERE order_id = %s AND item_id = %s
+                    """,
+                    (payload.order_id, payload.item_id),
+                )
+                reservation = cur.fetchone()
+                if reservation:
+                    reserved_qty, status = reservation
+                    if status == "RESERVED":
+                        if int(reserved_qty) != payload.qty:
+                            metrics["reserve_failed_total"] += 1
+                            raise HTTPException(status_code=409, detail="Reservation exists with different qty")
+                        return {
+                            "reserved": True,
+                            "already_reserved": True,
+                            "order_id": payload.order_id,
+                            "item_id": payload.item_id,
+                            "qty": payload.qty,
+                        }
+                    metrics["reserve_failed_total"] += 1
+                    raise HTTPException(status_code=409, detail="Reservation already released")
 
-            cur.execute(
-                "UPDATE menu_items SET available = FALSE WHERE id = %s AND available = TRUE",
-                (payload.item_id,),
-            )
-            if cur.rowcount != 1:
-                metrics["reserve_failed_total"] += 1
-                raise HTTPException(status_code=409, detail="Item unavailable")
-            conn.commit()
+                cur.execute("SELECT stock_quantity FROM menu_items WHERE id = %s FOR UPDATE", (payload.item_id,))
+                row = cur.fetchone()
+                if not row:
+                    metrics["reserve_failed_total"] += 1
+                    raise HTTPException(status_code=404, detail="Item not found")
 
-    rc.setex(f"reserve:{payload.order_id}", 3600, payload.item_id)
-    return {"reserved": True, "already_reserved": False, "order_id": payload.order_id, "item_id": payload.item_id}
+                current_qty = int(row[0])
+                if current_qty < payload.qty:
+                    metrics["reserve_failed_total"] += 1
+                    raise HTTPException(status_code=409, detail="Insufficient stock")
+
+                new_qty = current_qty - payload.qty
+                cur.execute(
+                    "UPDATE menu_items SET stock_quantity = %s, available = %s WHERE id = %s",
+                    (new_qty, new_qty > 0, payload.item_id),
+                )
+                cur.execute(
+                    """
+                    INSERT INTO stock_reservations(order_id, item_id, qty, status)
+                    VALUES (%s, %s, %s, 'RESERVED')
+                    """,
+                    (payload.order_id, payload.item_id, payload.qty),
+                )
+                conn.commit()
+
+        return {
+            "reserved": True,
+            "already_reserved": False,
+            "order_id": payload.order_id,
+            "item_id": payload.item_id,
+            "qty": payload.qty,
+        }
+    finally:
+        rc.delete(lock_key)
 
 
 @app.post("/stock/release")
 def release_stock(payload: ReleaseRequest):
     _should_fail()
-    rc = _redis_client()
-    item_id = rc.get(f"reserve:{payload.order_id}")
-    if not item_id:
-        raise HTTPException(status_code=404, detail="Reservation not found")
+    metrics["release_total"] += 1
 
     with _db_conn() as conn:
         with conn.cursor() as cur:
-            cur.execute("UPDATE menu_items SET available = TRUE WHERE id = %s", (item_id,))
+            cur.execute(
+                """
+                SELECT item_id, qty
+                FROM stock_reservations
+                WHERE order_id = %s AND status = 'RESERVED'
+                FOR UPDATE
+                """,
+                (payload.order_id,),
+            )
+            rows = cur.fetchall()
+            if not rows:
+                # Idempotent release: already released or missing
+                return {"released": True, "already_released": True, "order_id": payload.order_id}
+
+            for item_id, qty in rows:
+                cur.execute(
+                    """
+                    UPDATE menu_items
+                    SET stock_quantity = stock_quantity + %s,
+                        available = TRUE
+                    WHERE id = %s
+                    """,
+                    (qty, item_id),
+                )
+
+            cur.execute(
+                "UPDATE stock_reservations SET status = 'RELEASED' WHERE order_id = %s AND status = 'RESERVED'",
+                (payload.order_id,),
+            )
             conn.commit()
 
-    rc.delete(f"reserve:{payload.order_id}")
-    return {"released": True, "order_id": payload.order_id, "item_id": item_id}
+    return {"released": True, "already_released": False, "order_id": payload.order_id}

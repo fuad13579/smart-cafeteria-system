@@ -1,5 +1,6 @@
 import json
 import os
+import threading
 import time
 import uuid
 from typing import Any
@@ -20,8 +21,21 @@ metrics: dict[str, float] = {
     "latency_total_ms": 0,
     "latency_count": 0,
 }
+latency_samples_ms: list[float] = []
+service_started_at = time.time()
 
 chaos_state = {"enabled": False, "mode": "error"}
+stock_cache: dict[str, tuple[float, bool]] = {}
+stock_cache_lock = threading.Lock()
+
+
+def _stock_cache_ttl_seconds() -> float:
+    raw = os.getenv("STOCK_CACHE_TTL_SECONDS", "3")
+    try:
+        value = float(raw)
+        return value if value > 0 else 3.0
+    except ValueError:
+        return 3.0
 
 
 def _db_conn():
@@ -85,11 +99,21 @@ def _extract_student_id(authorization: str | None) -> str | None:
     if not token:
         return None
 
-    with _db_conn() as conn:
-        with conn.cursor() as cur:
-            cur.execute("SELECT student_id FROM auth_tokens WHERE token = %s", (token,))
-            row = cur.fetchone()
-            return row[0] if row else None
+    try:
+        with httpx.Client(timeout=2.0) as client:
+            resp = client.get(f"{_identity_url()}/verify", headers={"Authorization": f"Bearer {token}"})
+    except Exception:
+        raise HTTPException(status_code=503, detail="Identity service unavailable")
+
+    if resp.status_code == 200:
+        body = resp.json()
+        student_id = body.get("student_id")
+        return student_id if isinstance(student_id, str) and student_id else None
+
+    if resp.status_code in {401, 403}:
+        return None
+
+    raise HTTPException(status_code=503, detail="Identity verification failed")
 
 
 def _reserve_item(order_id: str, item_id: str, qty: int) -> None:
@@ -107,6 +131,37 @@ def _reserve_item(order_id: str, item_id: str, qty: int) -> None:
         raise HTTPException(status_code=400, detail=f"Item {item_id} not found")
     if resp.status_code >= 500:
         raise HTTPException(status_code=503, detail="Stock service failure")
+    _invalidate_stock_cache(item_id)
+
+
+def _invalidate_stock_cache(item_id: str) -> None:
+    with stock_cache_lock:
+        stock_cache.pop(item_id, None)
+
+
+def _is_stock_available_cached(item_id: str) -> bool:
+    now = time.time()
+    with stock_cache_lock:
+        row = stock_cache.get(item_id)
+        if row and row[0] > now:
+            return row[1]
+
+    try:
+        with httpx.Client(timeout=1.0) as client:
+            resp = client.get(f"{_stock_url()}/stock/{item_id}")
+    except Exception as exc:
+        raise HTTPException(status_code=503, detail=f"Stock service unavailable: {exc}") from exc
+
+    if resp.status_code == 404:
+        raise HTTPException(status_code=400, detail=f"Item {item_id} not found")
+    if resp.status_code >= 500:
+        raise HTTPException(status_code=503, detail="Stock service failure")
+
+    body = resp.json()
+    is_available = bool(body.get("available", False))
+    with stock_cache_lock:
+        stock_cache[item_id] = (now + _stock_cache_ttl_seconds(), is_available)
+    return is_available
 
 
 def _publish_kitchen_job(order: dict[str, Any]) -> None:
@@ -123,6 +178,65 @@ def _publish_kitchen_job(order: dict[str, Any]) -> None:
         connection.close()
     except Exception as exc:
         raise HTTPException(status_code=503, detail=f"Queue unavailable: {exc}") from exc
+
+
+def _percentile(values: list[float], pct: float) -> float:
+    if not values:
+        return 0.0
+    sorted_values = sorted(values)
+    idx = int(round((pct / 100.0) * (len(sorted_values) - 1)))
+    idx = min(max(idx, 0), len(sorted_values) - 1)
+    return sorted_values[idx]
+
+
+def _queue_depth(queue_name: str = "kitchen.jobs") -> int:
+    try:
+        connection = pika.BlockingConnection(_rabbit_params())
+        channel = connection.channel()
+        result = channel.queue_declare(queue=queue_name, durable=True, passive=True)
+        connection.close()
+        return int(result.method.message_count)
+    except Exception:
+        return -1
+
+
+def _find_idempotent_order(student_id: str, idempotency_key: str) -> dict[str, Any] | None:
+    with _db_conn() as conn:
+        with conn.cursor() as cur:
+            cur.execute(
+                """
+                SELECT o.id, o.status, o.eta_minutes, o.total_amount, o.created_at
+                FROM order_idempotency oi
+                JOIN orders o ON o.id = oi.order_id
+                WHERE oi.student_id = %s AND oi.idempotency_key = %s
+                """,
+                (student_id, idempotency_key),
+            )
+            row = cur.fetchone()
+            if not row:
+                return None
+            return {
+                "order_id": row[0],
+                "status": row[1],
+                "eta_minutes": row[2],
+                "total_amount": row[3],
+                "created_at": row[4].isoformat() if row[4] else None,
+                "idempotent_replay": True,
+            }
+
+
+def _store_idempotency(student_id: str, idempotency_key: str, order_id: str) -> None:
+    with _db_conn() as conn:
+        with conn.cursor() as cur:
+            cur.execute(
+                """
+                INSERT INTO order_idempotency(student_id, idempotency_key, order_id)
+                VALUES (%s, %s, %s)
+                ON CONFLICT (student_id, idempotency_key) DO NOTHING
+                """,
+                (student_id, idempotency_key, order_id),
+            )
+            conn.commit()
 
 
 @app.get("/health")
@@ -166,6 +280,18 @@ def get_metrics():
     }
 
 
+@app.get("/api/admin/metrics")
+def get_admin_metrics():
+    uptime_minutes = max((time.time() - service_started_at) / 60.0, 1.0 / 60.0)
+    return {
+        "latency_ms_p50": round(_percentile(latency_samples_ms, 50), 2),
+        "latency_ms_p95": round(_percentile(latency_samples_ms, 95), 2),
+        "orders_per_min": round(metrics["orders_total"] / uptime_minutes, 2),
+        "queue_depth": _queue_depth("kitchen.jobs"),
+        "updatedAt": int(time.time()),
+    }
+
+
 @app.post("/chaos/fail")
 def chaos_fail(payload: ChaosRequest):
     chaos_state["enabled"] = payload.enabled
@@ -194,9 +320,28 @@ def login(payload: LoginRequest):
         return JSONResponse(status_code=503, content={"message": f"Identity service unavailable: {exc}", "error": "Service Unavailable"})
 
 
+@app.post("/api/refresh")
+def refresh(authorization: str | None = Header(default=None)):
+    if not authorization:
+        raise HTTPException(status_code=401, detail="Missing or invalid token")
+    try:
+        with httpx.Client(timeout=5) as client:
+            resp = client.post(f"{_identity_url()}/refresh", headers={"Authorization": authorization})
+            if resp.status_code >= 400:
+                raise HTTPException(status_code=401, detail="Missing or invalid token")
+            return resp.json()
+    except HTTPException:
+        raise
+    except Exception as exc:
+        raise HTTPException(status_code=503, detail=f"Identity service unavailable: {exc}") from exc
+
+
 @app.get("/api/menu")
-def get_menu():
+def get_menu(authorization: str | None = Header(default=None)):
     _should_fail()
+    student_id = _extract_student_id(authorization)
+    if not student_id:
+        raise HTTPException(status_code=401, detail="Missing or invalid token")
 
     with _db_conn() as conn:
         with conn.cursor() as cur:
@@ -216,7 +361,11 @@ def get_menu():
 
 
 @app.post("/api/orders")
-def create_order(payload: CreateOrderRequest, authorization: str | None = Header(default=None)):
+def create_order(
+    payload: CreateOrderRequest,
+    authorization: str | None = Header(default=None),
+    idempotency_key: str | None = Header(default=None, alias="Idempotency-Key"),
+):
     start = time.perf_counter()
     _should_fail()
 
@@ -227,7 +376,13 @@ def create_order(payload: CreateOrderRequest, authorization: str | None = Header
     student_id = _extract_student_id(authorization)
     if not student_id:
         metrics["orders_failed_total"] += 1
-        return JSONResponse(status_code=401, content={"message": "Missing or invalid token", "error": "Unauthorized"})
+        raise HTTPException(status_code=401, detail="Missing or invalid token")
+
+    key = (idempotency_key or "").strip()
+    if key:
+        existing = _find_idempotent_order(student_id, key)
+        if existing:
+            return existing
 
     ids = list({line.id for line in payload.items})
 
@@ -253,6 +408,12 @@ def create_order(payload: CreateOrderRequest, authorization: str | None = Header
 
             order_id = str(uuid.uuid4())
             total = sum(menu_map[line.id]["price"] * line.qty for line in payload.items)
+
+            # Cache-first stock pre-check before reservation call.
+            for line in payload.items:
+                if not _is_stock_available_cached(line.id):
+                    metrics["orders_failed_total"] += 1
+                    raise HTTPException(status_code=409, detail=f"Item {line.id} unavailable")
 
             # Reserve stock before order insert.
             for line in payload.items:
@@ -289,11 +450,16 @@ def create_order(payload: CreateOrderRequest, authorization: str | None = Header
             "eta_minutes": 12,
         }
     )
+    if key:
+        _store_idempotency(student_id, key, order_id)
 
     metrics["orders_total"] += 1
     elapsed_ms = (time.perf_counter() - start) * 1000
     metrics["latency_total_ms"] += elapsed_ms
     metrics["latency_count"] += 1
+    latency_samples_ms.append(elapsed_ms)
+    if len(latency_samples_ms) > 500:
+        del latency_samples_ms[0]
 
     return {"order_id": order_id, "status": status_value, "eta_minutes": eta_minutes}
 

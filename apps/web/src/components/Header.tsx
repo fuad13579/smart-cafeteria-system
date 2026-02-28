@@ -4,8 +4,8 @@ import Link from "next/link";
 import Image from "next/image";
 import { useEffect, useState } from "react";
 import { useTheme } from "next-themes";
-import { clearCart, clearToken, getCart, getUser, type CartLine } from "@/lib/storage";
-import { usePathname, useRouter } from "next/navigation";
+import { getCart, type CartLine } from "@/lib/storage";
+import { usePathname } from "next/navigation";
 
 function NavLink({ href, label }: { href: string; label: string }) {
   const pathname = usePathname();
@@ -28,10 +28,7 @@ function NavLink({ href, label }: { href: string; label: string }) {
 
 export function Header() {
   const [cartCount, setCartCount] = useState(0);
-  const [name, setName] = useState<string | null>(null);
   const [mounted, setMounted] = useState(false);
-
-  const router = useRouter();
   const { resolvedTheme, setTheme } = useTheme();
 
   useEffect(() => {
@@ -40,8 +37,6 @@ export function Header() {
 
   useEffect(() => {
     const sync = () => {
-      const user = getUser();
-      setName(user?.name ?? null);
       const cart = getCart();
       setCartCount(cart.reduce((a: number, c: CartLine) => a + c.qty, 0));
     };
@@ -61,12 +56,6 @@ export function Header() {
     setTheme(resolvedTheme === "dark" ? "light" : "dark");
   };
 
-  const logout = () => {
-    clearToken();
-    clearCart();
-    router.push("/login");
-  };
-
   return (
     <header className="sticky top-0 z-10 border-b border-zinc-200 bg-white/80 backdrop-blur dark:border-zinc-900 dark:bg-zinc-950/80">
       <div className="mx-auto flex max-w-4xl items-center justify-between px-4 py-3">
@@ -82,16 +71,7 @@ export function Header() {
           <NavLink href="/menu" label="Menu" />
           <NavLink href="/cart" label={`Cart (${cartCount})`} />
 
-          {name ? (
-            <button
-              onClick={logout}
-              className="rounded-full border border-zinc-300 px-3 py-1 text-sm text-zinc-700 hover:bg-zinc-100 dark:border-zinc-800 dark:text-zinc-200 dark:hover:bg-zinc-900"
-            >
-              Logout
-            </button>
-          ) : (
-            <NavLink href="/login" label="Login" />
-          )}
+          <NavLink href="/login" label="Login" />
 
           <button
             onClick={toggleTheme}

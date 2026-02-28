@@ -7,6 +7,8 @@
 - `migrations/004_audit.sql` - `updated_at` columns + triggers
 - `migrations/005_views.sql` - analytics and summary views
 - `migrations/006_constraints.sql` - data integrity constraints
+- `migrations/007_account_balance.sql` - adds student account balance field
+- `migrations/008_inventory_and_idempotency.sql` - stock quantity + reservation/idempotency tables
 
 ## Apply migrations
 Run from repo root:

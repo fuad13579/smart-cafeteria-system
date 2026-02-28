@@ -33,3 +33,9 @@ demo-seed:
 
 smoke-test:
 	./scripts/smoke-test.sh
+
+venv-service:
+	./scripts/setup-service-venv.sh $(SERVICE)
+
+venv-all:
+	./scripts/setup-service-venv.sh --all
