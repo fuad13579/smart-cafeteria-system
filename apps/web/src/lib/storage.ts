@@ -11,6 +11,7 @@ export interface User {
   id?: string;
   student_id?: string;
   account_balance?: number;
+  role?: string;
 }
 
 const CART_KEY = "cafeteria:cart";

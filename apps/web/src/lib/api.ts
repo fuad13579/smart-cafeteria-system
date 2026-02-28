@@ -137,6 +137,7 @@ async function makeMockRequest<T>(
 
   if (method === "POST" && endpoint === "/auth/login") {
     const studentId = body?.student_id || "2100000";
+    const role = studentId === "admin-demo" ? "admin" : "student";
     return {
       access_token: "mock-token",
       user: {
@@ -144,6 +145,7 @@ async function makeMockRequest<T>(
         id: studentId,
         student_id: studentId,
         account_balance: 1250,
+        role,
       },
     } as T;
   }
@@ -155,6 +157,7 @@ async function makeMockRequest<T>(
         id: "2100000",
         student_id: "2100000",
         account_balance: 1250,
+        role: "student",
       },
     } as T;
   }
@@ -166,10 +169,18 @@ async function makeMockRequest<T>(
   if (method === "GET" && endpoint === "/menu") {
     return {
       items: [
-        { id: "1", name: "Chicken Burger", price: 120, available: true },
-        { id: "2", name: "Beef Burger", price: 150, available: true },
-        { id: "3", name: "French Fries", price: 60, available: false },
-        { id: "4", name: "Water", price: 20, available: true },
+        {
+          id: "1",
+          name: "Platter 1 (Khichuri + Chicken + Pickle)",
+          price: 220,
+          available: true,
+        },
+        {
+          id: "2",
+          name: "Platter 2 (Polao + Roast + Salad)",
+          price: 280,
+          available: true,
+        },
       ],
     } as T;
   }

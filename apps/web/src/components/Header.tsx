@@ -4,7 +4,7 @@ import Link from "next/link";
 import Image from "next/image";
 import { useEffect, useState } from "react";
 import { useTheme } from "next-themes";
-import { getCart, type CartLine } from "@/lib/storage";
+import { getCart, getUser, type CartLine, type User } from "@/lib/storage";
 import { usePathname } from "next/navigation";
 
 function NavLink({ href, label }: { href: string; label: string }) {
@@ -28,6 +28,7 @@ function NavLink({ href, label }: { href: string; label: string }) {
 
 export function Header() {
   const [cartCount, setCartCount] = useState(0);
+  const [currentUser, setCurrentUser] = useState<User | null>(null);
   const [mounted, setMounted] = useState(false);
   const { resolvedTheme, setTheme } = useTheme();
 
@@ -39,6 +40,7 @@ export function Header() {
     const sync = () => {
       const cart = getCart();
       setCartCount(cart.reduce((a: number, c: CartLine) => a + c.qty, 0));
+      setCurrentUser(getUser());
     };
 
     sync();
@@ -71,6 +73,7 @@ export function Header() {
           <NavLink href="/menu" label="Menu" />
           <NavLink href="/cart" label={`Cart (${cartCount})`} />
           <NavLink href="/orders" label="Orders" />
+          {currentUser?.role === "admin" && <NavLink href="/admin" label="Admin" />}
 
           <NavLink href="/login" label="Login" />
 
