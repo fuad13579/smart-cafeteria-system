@@ -1,4 +1,5 @@
 import os
+import time
 from datetime import datetime, timedelta, timezone
 
 from fastapi import FastAPI, HTTPException
@@ -14,6 +15,7 @@ metrics: dict[str, float] = {
     "verify_total": 0,
     "verify_failed_total": 0,
 }
+chaos_state = {"enabled": False, "mode": "error"}
 
 
 def _db_conn():
@@ -29,6 +31,19 @@ def _db_conn():
 class LoginRequest(BaseModel):
     student_id: str
     password: str
+
+
+class ChaosRequest(BaseModel):
+    enabled: bool
+    mode: str = "error"
+
+
+def _should_fail() -> None:
+    if not chaos_state["enabled"]:
+        return
+    if chaos_state["mode"] == "timeout":
+        time.sleep(2)
+    raise HTTPException(status_code=503, detail="Service in chaos mode")
 
 
 def _fetch_user(student_id: str) -> dict | None:
@@ -99,6 +114,7 @@ def _resolve_role(student_id: str) -> str:
 
 @app.get("/health")
 def health():
+    _should_fail()
     try:
         with _db_conn() as conn:
             with conn.cursor() as cur:
@@ -111,6 +127,7 @@ def health():
 
 @app.post("/login")
 def login(payload: LoginRequest):
+    _should_fail()
     metrics["login_total"] += 1
     query = """
         SELECT student_id, full_name, account_balance
@@ -159,6 +176,7 @@ def get_metrics():
 
 @app.get("/verify")
 def verify_token(authorization: str | None = Header(default=None)):
+    _should_fail()
     metrics["verify_total"] += 1
     if not authorization or not authorization.startswith("Bearer "):
         metrics["verify_failed_total"] += 1
@@ -185,6 +203,7 @@ def verify_token(authorization: str | None = Header(default=None)):
 
 @app.post("/refresh")
 def refresh_token(authorization: str | None = Header(default=None)):
+    _should_fail()
     if not authorization or not authorization.startswith("Bearer "):
         raise HTTPException(status_code=401, detail="Missing bearer token")
 
@@ -211,6 +230,7 @@ def refresh_token(authorization: str | None = Header(default=None)):
 
 @app.get("/me")
 def me(authorization: str | None = Header(default=None)):
+    _should_fail()
     if not authorization or not authorization.startswith("Bearer "):
         raise HTTPException(status_code=401, detail="Missing bearer token")
 
@@ -228,3 +248,10 @@ def me(authorization: str | None = Header(default=None)):
         raise HTTPException(status_code=401, detail="User not found")
 
     return {"user": user}
+
+
+@app.post("/chaos/fail")
+def chaos_fail(payload: ChaosRequest):
+    chaos_state["enabled"] = payload.enabled
+    chaos_state["mode"] = payload.mode if payload.mode in {"error", "timeout"} else "error"
+    return {"status": "ok", "chaos": chaos_state}

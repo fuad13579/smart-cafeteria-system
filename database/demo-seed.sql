@@ -13,15 +13,27 @@ SET full_name = EXCLUDED.full_name,
 
 INSERT INTO menu_items (id, name, price, stock_quantity, available)
 VALUES
-    ('1', 'Chicken Burger', 120, 30, TRUE),
-    ('2', 'Beef Burger', 150, 25, TRUE),
-    ('3', 'French Fries', 60, 0, FALSE),
-    ('4', 'Water', 20, 100, TRUE),
-    ('5', 'Noodles', 110, 35, TRUE),
-    ('6', 'Tea', 15, 120, TRUE)
+    ('1', 'Platter 1 (Khichuri + Chicken + Pickle)', 220, 40, TRUE),
+    ('2', 'Platter 2 (Polao + Roast + Salad)', 280, 40, TRUE)
 ON CONFLICT (id) DO UPDATE
 SET name = EXCLUDED.name,
     price = EXCLUDED.price,
     stock_quantity = EXCLUDED.stock_quantity,
     available = EXCLUDED.available,
     updated_at = NOW();
+
+DELETE FROM menu_items WHERE id NOT IN ('1', '2');
+
+INSERT INTO menu_windows (name, start_date, end_date, start_time, end_time, timezone, is_active)
+VALUES
+    ('iftar', '2026-03-01', '2026-03-31', '17:45:00', '20:30:00', 'Asia/Dhaka', TRUE),
+    ('saheri', '2026-03-01', '2026-03-31', '02:30:00', '04:45:00', 'Asia/Dhaka', TRUE)
+ON CONFLICT DO NOTHING;
+
+INSERT INTO menu_item_windows (window_id, item_id)
+SELECT mw.id, mi.id
+FROM menu_windows mw
+JOIN menu_items mi ON TRUE
+WHERE mw.name IN ('iftar', 'saheri')
+  AND mi.id IN ('1', '2')
+ON CONFLICT DO NOTHING;

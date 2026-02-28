@@ -10,6 +10,7 @@
 - `migrations/007_account_balance.sql` - adds student account balance field
 - `migrations/008_inventory_and_idempotency.sql` - stock quantity + reservation/idempotency tables
 - `migrations/009_order_outbox.sql` - transactional outbox table for reliable event publishing
+- `migrations/010_menu_windows.sql` - Ramadan/contextual menu windows and item assignments
 
 ## Apply migrations
 Run from repo root:

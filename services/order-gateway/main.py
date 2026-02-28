@@ -3,12 +3,14 @@ import os
 import threading
 import time
 import uuid
+from datetime import date, datetime, time as dt_time, timedelta
 from typing import Any
+from zoneinfo import ZoneInfo
 
 import httpx
 import pika
 import psycopg
-from fastapi import Cookie, FastAPI, Header, HTTPException, Response
+from fastapi import Cookie, FastAPI, Header, HTTPException, Query, Response
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 from pydantic import BaseModel, Field
@@ -62,6 +64,10 @@ def _jwt_exp_minutes() -> int:
 
 def _cookie_secure() -> bool:
     return os.getenv("COOKIE_SECURE", "false").lower() == "true"
+
+
+def _menu_timezone() -> str:
+    return os.getenv("MENU_TIMEZONE", "Asia/Dhaka")
 
 
 def _db_conn():
@@ -142,6 +148,30 @@ class AdminMenuAvailabilityRequest(BaseModel):
     available: bool
 
 
+class AdminMenuWindowCreateRequest(BaseModel):
+    name: str
+    start_date: date
+    end_date: date
+    start_time: dt_time
+    end_time: dt_time
+    timezone: str = "Asia/Dhaka"
+    is_active: bool = True
+
+
+class AdminMenuWindowUpdateRequest(BaseModel):
+    name: str
+    start_date: date
+    end_date: date
+    start_time: dt_time
+    end_time: dt_time
+    timezone: str
+    is_active: bool
+
+
+class AdminMenuWindowItemsRequest(BaseModel):
+    item_ids: list[str]
+
+
 def _extract_token(authorization: str | None, cookie_token: str | None) -> str | None:
     if authorization and authorization.startswith("Bearer "):
         token = authorization.split(" ", 1)[1].strip()
@@ -191,6 +221,150 @@ def _require_admin(authorization: str | None, cookie_token: str | None) -> dict[
     if auth.get("role") != "admin":
         raise HTTPException(status_code=403, detail="Admin access required")
     return auth
+
+
+def _parse_debug_time(debug_value: str | None) -> datetime | None:
+    if not debug_value:
+        return None
+    try:
+        parsed = datetime.fromisoformat(debug_value)
+        if parsed.tzinfo is None:
+            parsed = parsed.replace(tzinfo=ZoneInfo(_menu_timezone()))
+        return parsed.astimezone(ZoneInfo(_menu_timezone()))
+    except Exception:
+        return None
+
+
+def _is_cross_midnight(start: dt_time, end: dt_time) -> bool:
+    return start > end
+
+
+def _time_in_range(now_t: dt_time, start: dt_time, end: dt_time) -> bool:
+    if start <= end:
+        return start <= now_t < end
+    return now_t >= start or now_t < end
+
+
+def _window_active_for_datetime(
+    now_local: datetime,
+    start_date: date,
+    end_date: date,
+    start_time: dt_time,
+    end_time: dt_time,
+) -> bool:
+    now_d = now_local.date()
+    now_t = now_local.time()
+
+    if start_time <= end_time:
+        if not (start_date <= now_d <= end_date):
+            return False
+        return _time_in_range(now_t, start_time, end_time)
+
+    # Cross-midnight window:
+    # 1) same-day evening segment
+    if start_date <= now_d <= end_date and now_t >= start_time:
+        return True
+    # 2) after-midnight segment belongs to previous date's window
+    prev_d = now_d - timedelta(days=1)
+    if start_date <= prev_d <= end_date and now_t < end_time:
+        return True
+    return False
+
+
+def _next_change_at_for_window(
+    now_local: datetime,
+    start_date: date,
+    end_date: date,
+    start_time: dt_time,
+    end_time: dt_time,
+) -> datetime | None:
+    now_d = now_local.date()
+    now_t = now_local.time()
+
+    if start_time <= end_time:
+        if start_date <= now_d <= end_date and _time_in_range(now_t, start_time, end_time):
+            return datetime.combine(now_d, end_time, tzinfo=now_local.tzinfo)
+        return None
+
+    # Cross-midnight active on same-day evening.
+    if start_date <= now_d <= end_date and now_t >= start_time:
+        return datetime.combine(now_d + timedelta(days=1), end_time, tzinfo=now_local.tzinfo)
+
+    # Cross-midnight active on after-midnight segment.
+    prev_d = now_d - timedelta(days=1)
+    if start_date <= prev_d <= end_date and now_t < end_time:
+        return datetime.combine(now_d, end_time, tzinfo=now_local.tzinfo)
+
+    return None
+
+
+def _resolve_auto_context(now_local: datetime) -> tuple[str, str | None]:
+    with _db_conn() as conn:
+        with conn.cursor() as cur:
+            cur.execute(
+                """
+                SELECT id, name, start_date, end_date, start_time, end_time
+                FROM menu_windows
+                WHERE is_active = TRUE
+                ORDER BY id ASC
+                """
+            )
+            rows = cur.fetchall()
+
+    active_name: str | None = None
+    next_change: datetime | None = None
+    for row in rows:
+        _, name, start_d, end_d, start_t, end_t = row
+        if _window_active_for_datetime(now_local, start_d, end_d, start_t, end_t):
+            active_name = str(name)
+            change_at = _next_change_at_for_window(now_local, start_d, end_d, start_t, end_t)
+            if change_at and (next_change is None or change_at < next_change):
+                next_change = change_at
+
+    if active_name in {"iftar", "saheri"}:
+        return active_name, next_change.isoformat() if next_change else None
+    return "regular", next_change.isoformat() if next_change else None
+
+
+def _get_context_items(context: str, now_local: datetime) -> list[dict[str, Any]]:
+    if context == "regular":
+        with _db_conn() as conn:
+            with conn.cursor() as cur:
+                cur.execute(
+                    """
+                    SELECT id, name, price, available
+                    FROM menu_items
+                    ORDER BY id
+                    """
+                )
+                rows = cur.fetchall()
+        return [
+            {"id": row[0], "name": row[1], "price": int(row[2]), "available": bool(row[3])}
+            for row in rows
+        ]
+
+    # iftar/saheri by active date range (time-agnostic for explicit context tabs)
+    now_d = now_local.date()
+    with _db_conn() as conn:
+        with conn.cursor() as cur:
+            cur.execute(
+                """
+                SELECT DISTINCT mi.id, mi.name, mi.price, mi.available
+                FROM menu_items mi
+                JOIN menu_item_windows miw ON miw.item_id = mi.id
+                JOIN menu_windows mw ON mw.id = miw.window_id
+                WHERE mw.is_active = TRUE
+                  AND mw.name = %s
+                  AND %s BETWEEN mw.start_date AND mw.end_date
+                ORDER BY mi.id
+                """,
+                (context, now_d),
+            )
+            rows = cur.fetchall()
+    return [
+        {"id": row[0], "name": row[1], "price": int(row[2]), "available": bool(row[3])}
+        for row in rows
+    ]
 
 
 def _fetch_user(student_id: str) -> dict | None:
@@ -721,6 +895,201 @@ def admin_patch_menu_item_availability(
     }
 
 
+@app.get("/api/admin/menu/windows")
+def admin_get_menu_windows(
+    authorization: str | None = Header(default=None),
+    access_token: str | None = Cookie(default=None, alias=ACCESS_COOKIE_NAME),
+):
+    _should_fail()
+    _require_admin(authorization, access_token)
+
+    with _db_conn() as conn:
+        with conn.cursor() as cur:
+            cur.execute(
+                """
+                SELECT mw.id, mw.name, mw.start_date, mw.end_date, mw.start_time, mw.end_time, mw.timezone, mw.is_active,
+                       COALESCE(array_agg(miw.item_id) FILTER (WHERE miw.item_id IS NOT NULL), ARRAY[]::text[]) AS item_ids
+                FROM menu_windows mw
+                LEFT JOIN menu_item_windows miw ON miw.window_id = mw.id
+                GROUP BY mw.id
+                ORDER BY mw.id
+                """
+            )
+            rows = cur.fetchall()
+    return {
+        "windows": [
+            {
+                "id": int(row[0]),
+                "name": row[1],
+                "start_date": row[2].isoformat(),
+                "end_date": row[3].isoformat(),
+                "start_time": row[4].isoformat(),
+                "end_time": row[5].isoformat(),
+                "timezone": row[6],
+                "is_active": bool(row[7]),
+                "item_ids": list(row[8] or []),
+            }
+            for row in rows
+        ]
+    }
+
+
+@app.post("/api/admin/menu/windows")
+def admin_create_menu_window(
+    payload: AdminMenuWindowCreateRequest,
+    authorization: str | None = Header(default=None),
+    access_token: str | None = Cookie(default=None, alias=ACCESS_COOKIE_NAME),
+):
+    _should_fail()
+    _require_admin(authorization, access_token)
+    if payload.name not in {"iftar", "saheri"}:
+        raise HTTPException(status_code=422, detail="name must be iftar|saheri")
+
+    with _db_conn() as conn:
+        with conn.cursor() as cur:
+            cur.execute(
+                """
+                INSERT INTO menu_windows(name, start_date, end_date, start_time, end_time, timezone, is_active)
+                VALUES (%s, %s, %s, %s, %s, %s, %s)
+                RETURNING id, name, start_date, end_date, start_time, end_time, timezone, is_active
+                """,
+                (
+                    payload.name,
+                    payload.start_date,
+                    payload.end_date,
+                    payload.start_time,
+                    payload.end_time,
+                    payload.timezone,
+                    payload.is_active,
+                ),
+            )
+            row = cur.fetchone()
+            conn.commit()
+    return {
+        "window": {
+            "id": int(row[0]),
+            "name": row[1],
+            "start_date": row[2].isoformat(),
+            "end_date": row[3].isoformat(),
+            "start_time": row[4].isoformat(),
+            "end_time": row[5].isoformat(),
+            "timezone": row[6],
+            "is_active": bool(row[7]),
+            "item_ids": [],
+        }
+    }
+
+
+@app.put("/api/admin/menu/windows/{window_id}")
+def admin_update_menu_window(
+    window_id: int,
+    payload: AdminMenuWindowUpdateRequest,
+    authorization: str | None = Header(default=None),
+    access_token: str | None = Cookie(default=None, alias=ACCESS_COOKIE_NAME),
+):
+    _should_fail()
+    _require_admin(authorization, access_token)
+    if payload.name not in {"iftar", "saheri"}:
+        raise HTTPException(status_code=422, detail="name must be iftar|saheri")
+
+    with _db_conn() as conn:
+        with conn.cursor() as cur:
+            cur.execute(
+                """
+                UPDATE menu_windows
+                SET name = %s, start_date = %s, end_date = %s, start_time = %s, end_time = %s, timezone = %s, is_active = %s
+                WHERE id = %s
+                RETURNING id, name, start_date, end_date, start_time, end_time, timezone, is_active
+                """,
+                (
+                    payload.name,
+                    payload.start_date,
+                    payload.end_date,
+                    payload.start_time,
+                    payload.end_time,
+                    payload.timezone,
+                    payload.is_active,
+                    window_id,
+                ),
+            )
+            row = cur.fetchone()
+            if not row:
+                raise HTTPException(status_code=404, detail="Window not found")
+            conn.commit()
+    return {
+        "window": {
+            "id": int(row[0]),
+            "name": row[1],
+            "start_date": row[2].isoformat(),
+            "end_date": row[3].isoformat(),
+            "start_time": row[4].isoformat(),
+            "end_time": row[5].isoformat(),
+            "timezone": row[6],
+            "is_active": bool(row[7]),
+        }
+    }
+
+
+@app.delete("/api/admin/menu/windows/{window_id}")
+def admin_delete_menu_window(
+    window_id: int,
+    authorization: str | None = Header(default=None),
+    access_token: str | None = Cookie(default=None, alias=ACCESS_COOKIE_NAME),
+):
+    _should_fail()
+    _require_admin(authorization, access_token)
+
+    with _db_conn() as conn:
+        with conn.cursor() as cur:
+            cur.execute("DELETE FROM menu_windows WHERE id = %s", (window_id,))
+            deleted = cur.rowcount
+            conn.commit()
+    if deleted == 0:
+        raise HTTPException(status_code=404, detail="Window not found")
+    return {"ok": True, "window_id": window_id}
+
+
+@app.post("/api/admin/menu/windows/{window_id}/items")
+def admin_assign_window_items(
+    window_id: int,
+    payload: AdminMenuWindowItemsRequest,
+    authorization: str | None = Header(default=None),
+    access_token: str | None = Cookie(default=None, alias=ACCESS_COOKIE_NAME),
+):
+    _should_fail()
+    _require_admin(authorization, access_token)
+
+    clean_ids = [item_id.strip() for item_id in payload.item_ids if item_id.strip()]
+    unique_ids = sorted(set(clean_ids))
+
+    with _db_conn() as conn:
+        with conn.cursor() as cur:
+            cur.execute("SELECT id FROM menu_windows WHERE id = %s", (window_id,))
+            if not cur.fetchone():
+                raise HTTPException(status_code=404, detail="Window not found")
+
+            if unique_ids:
+                placeholders = ",".join(["%s"] * len(unique_ids))
+                cur.execute(f"SELECT id FROM menu_items WHERE id IN ({placeholders})", tuple(unique_ids))
+                found = {row[0] for row in cur.fetchall()}
+                missing = [x for x in unique_ids if x not in found]
+                if missing:
+                    raise HTTPException(status_code=404, detail=f"Menu item(s) not found: {', '.join(missing)}")
+
+            cur.execute("DELETE FROM menu_item_windows WHERE window_id = %s", (window_id,))
+            for item_id in unique_ids:
+                cur.execute(
+                    """
+                    INSERT INTO menu_item_windows(window_id, item_id)
+                    VALUES (%s, %s)
+                    ON CONFLICT DO NOTHING
+                    """,
+                    (window_id, item_id),
+                )
+            conn.commit()
+    return {"ok": True, "window_id": window_id, "item_ids": unique_ids}
+
+
 @app.post("/api/login")
 def login(payload: LoginRequest, response: Response):
     _should_fail()
@@ -815,6 +1184,8 @@ def auth_logout(response: Response):
 
 @app.get("/api/menu")
 def get_menu(
+    context: str = Query(default="auto"),
+    x_debug_time: str | None = Header(default=None, alias="X-Debug-Time"),
     authorization: str | None = Header(default=None),
     access_token: str | None = Cookie(default=None, alias=ACCESS_COOKIE_NAME),
 ):
@@ -823,21 +1194,25 @@ def get_menu(
     if not auth:
         raise HTTPException(status_code=401, detail="Missing or invalid token")
 
-    with _db_conn() as conn:
-        with conn.cursor() as cur:
-            cur.execute(
-                """
-                SELECT id, name, price, available
-                FROM menu_items
-                ORDER BY id
-                """
-            )
-            items = [
-                {"id": row[0], "name": row[1], "price": row[2], "available": row[3]}
-                for row in cur.fetchall()
-            ]
+    requested = (context or "auto").strip().lower()
+    if requested not in {"auto", "regular", "iftar", "saheri"}:
+        raise HTTPException(status_code=422, detail="context must be auto|regular|iftar|saheri")
 
-    return {"items": items}
+    now_local = _parse_debug_time(x_debug_time) or datetime.now(ZoneInfo(_menu_timezone()))
+
+    if requested == "auto":
+        active_context, next_change_at = _resolve_auto_context(now_local)
+        items = _get_context_items(active_context, now_local)
+    else:
+        active_context = requested
+        next_change_at = None
+        items = _get_context_items(active_context, now_local)
+
+    return {
+        "active_context": active_context,
+        "next_change_at": next_change_at,
+        "items": items,
+    }
 
 
 @app.post("/api/orders")

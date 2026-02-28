@@ -27,23 +27,30 @@ Failure:
 - `5xx`: `{ "message": "...", "error": "Service Unavailable" }`
 
 ## Menu
-### GET `/api/menu`
+### GET `/api/menu?context=auto|regular|iftar|saheri`
 Headers:
 - `Authorization: Bearer <access_token>` (recommended; backend may keep public read for demo)
+- Optional (dev/demo): `X-Debug-Time: 2026-03-10T18:20:00+06:00`
 
 Success `200`:
 ```json
 {
+  "active_context": "regular|iftar|saheri",
+  "next_change_at": "2026-03-10T18:45:00+06:00",
   "items": [
     {
       "id": "1",
-      "name": "Chicken Burger",
-      "price": 120,
+      "name": "Platter 1 (Khichuri + Chicken + Pickle)",
+      "price": 220,
       "available": true
     }
   ]
 }
 ```
+Notes:
+- `context=auto` resolves by server time (`Asia/Dhaka`) and returns `active_context`.
+- `context=regular|iftar|saheri` forces that menu context.
+
 Failure:
 - `401`: `{ "message": "Unauthorized", "error": "Unauthorized" }`
 

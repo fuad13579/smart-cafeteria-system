@@ -107,10 +107,18 @@ export async function apiMenu(): Promise<MenuItem[]> {
       throw buildMockError("/menu");
     }
     return [
-      { id: "1", name: "Chicken Burger", price: 120, available: true },
-      { id: "2", name: "Beef Burger", price: 150, available: true },
-      { id: "3", name: "French Fries", price: 60, available: false },
-      { id: "4", name: "Water", price: 20, available: true },
+      {
+        id: "1",
+        name: "Platter 1 (Khichuri + Chicken + Pickle)",
+        price: 220,
+        available: true,
+      },
+      {
+        id: "2",
+        name: "Platter 2 (Polao + Roast + Salad)",
+        price: 280,
+        available: true,
+      },
     ];
   }
   const res = await fetch(resolveUrl("/menu"));

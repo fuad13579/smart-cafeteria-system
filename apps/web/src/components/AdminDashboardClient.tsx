@@ -21,6 +21,18 @@ type AdminMenuItem = {
   available: boolean;
 };
 
+type AdminMenuWindow = {
+  id: number;
+  name: "iftar" | "saheri";
+  start_date: string;
+  end_date: string;
+  start_time: string;
+  end_time: string;
+  timezone: string;
+  is_active: boolean;
+  item_ids: string[];
+};
+
 function Badge({ status }: { status: Service["status"] }) {
   const cls =
     status === "up"
@@ -60,6 +72,18 @@ export function AdminDashboardClient() {
   const [itemPrice, setItemPrice] = useState("0");
   const [itemStock, setItemStock] = useState("0");
   const [itemAvailable, setItemAvailable] = useState(true);
+  const [windows, setWindows] = useState<AdminMenuWindow[]>([]);
+  const [windowBusy, setWindowBusy] = useState(false);
+  const [windowMessage, setWindowMessage] = useState<string | null>(null);
+  const [windowId, setWindowId] = useState<string>("");
+  const [windowName, setWindowName] = useState<"iftar" | "saheri">("iftar");
+  const [windowStartDate, setWindowStartDate] = useState("2026-03-01");
+  const [windowEndDate, setWindowEndDate] = useState("2026-03-31");
+  const [windowStartTime, setWindowStartTime] = useState("17:45");
+  const [windowEndTime, setWindowEndTime] = useState("20:30");
+  const [windowTimezone, setWindowTimezone] = useState("Asia/Dhaka");
+  const [windowActive, setWindowActive] = useState(true);
+  const [windowItemIdsCsv, setWindowItemIdsCsv] = useState("");
 
   const services = useMemo(() => health?.services ?? [], [health]);
 
@@ -71,6 +95,17 @@ export function AdminDashboardClient() {
       setMenuItems(data.items ?? []);
     } catch (e: any) {
       setMenuMessage(e?.message ?? "Failed to load menu");
+    }
+  }
+
+  async function loadWindows() {
+    try {
+      const res = await fetch("/api/admin/menu/windows", { cache: "no-store" });
+      const data = await res.json();
+      if (!res.ok) throw new Error(data?.detail ?? data?.error ?? "Failed to load windows");
+      setWindows(data.windows ?? []);
+    } catch (e: any) {
+      setWindowMessage(e?.message ?? "Failed to load windows");
     }
   }
 
@@ -93,6 +128,7 @@ export function AdminDashboardClient() {
 
     refresh();
     loadMenu();
+    loadWindows();
     const t = setInterval(refresh, 2000);
     return () => {
       alive = false;
@@ -116,6 +152,45 @@ export function AdminDashboardClient() {
     } catch (e: any) {
       setToast(e?.message ?? "Chaos action failed");
       setTimeout(() => setToast(null), 2000);
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const recoverAllServices = async () => {
+    setBusy(true);
+    setToast(null);
+    const serviceList = [
+      "identity-provider",
+      "order-gateway",
+      "stock-service",
+      "kitchen-queue",
+      "notification-hub",
+      "payment-service",
+    ];
+    try {
+      const results = await Promise.all(
+        serviceList.map(async (service) => {
+          const res = await fetch("/api/admin/chaos", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ service, action: "restart" }),
+          });
+          const data = await res.json().catch(() => ({}));
+          return { service, ok: res.ok, error: data?.error as string | undefined };
+        })
+      );
+
+      const failed = results.filter((r) => !r.ok);
+      if (failed.length > 0) {
+        setToast(`Recover all completed with ${failed.length} failure(s)`);
+      } else {
+        setToast("Recovered all services from chaos mode");
+      }
+      setTimeout(() => setToast(null), 2200);
+    } catch (e: any) {
+      setToast(e?.message ?? "Recover all failed");
+      setTimeout(() => setToast(null), 2200);
     } finally {
       setBusy(false);
     }
@@ -198,6 +273,121 @@ export function AdminDashboardClient() {
       setMenuMessage(e?.message ?? "Toggle failed");
     } finally {
       setMenuBusy(false);
+    }
+  };
+
+  const resetWindowForm = () => {
+    setWindowId("");
+    setWindowName("iftar");
+    setWindowStartDate("2026-03-01");
+    setWindowEndDate("2026-03-31");
+    setWindowStartTime("17:45");
+    setWindowEndTime("20:30");
+    setWindowTimezone("Asia/Dhaka");
+    setWindowActive(true);
+    setWindowItemIdsCsv("");
+  };
+
+  const createWindow = async () => {
+    setWindowBusy(true);
+    setWindowMessage(null);
+    try {
+      const res = await fetch("/api/admin/menu/windows", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          name: windowName,
+          start_date: windowStartDate,
+          end_date: windowEndDate,
+          start_time: `${windowStartTime}:00`,
+          end_time: `${windowEndTime}:00`,
+          timezone: windowTimezone,
+          is_active: windowActive,
+        }),
+      });
+      const data = await res.json();
+      if (!res.ok) throw new Error(data?.detail ?? data?.error ?? "Window create failed");
+      setWindowMessage("Window created");
+      await loadWindows();
+      resetWindowForm();
+    } catch (e: any) {
+      setWindowMessage(e?.message ?? "Window create failed");
+    } finally {
+      setWindowBusy(false);
+    }
+  };
+
+  const updateWindow = async () => {
+    if (!windowId) return;
+    setWindowBusy(true);
+    setWindowMessage(null);
+    try {
+      const res = await fetch(`/api/admin/menu/windows/${windowId}`, {
+        method: "PUT",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          name: windowName,
+          start_date: windowStartDate,
+          end_date: windowEndDate,
+          start_time: `${windowStartTime}:00`,
+          end_time: `${windowEndTime}:00`,
+          timezone: windowTimezone,
+          is_active: windowActive,
+        }),
+      });
+      const data = await res.json();
+      if (!res.ok) throw new Error(data?.detail ?? data?.error ?? "Window update failed");
+      setWindowMessage("Window updated");
+      await loadWindows();
+    } catch (e: any) {
+      setWindowMessage(e?.message ?? "Window update failed");
+    } finally {
+      setWindowBusy(false);
+    }
+  };
+
+  const deleteWindow = async () => {
+    if (!windowId) return;
+    setWindowBusy(true);
+    setWindowMessage(null);
+    try {
+      const res = await fetch(`/api/admin/menu/windows/${windowId}`, {
+        method: "DELETE",
+      });
+      const data = await res.json();
+      if (!res.ok) throw new Error(data?.detail ?? data?.error ?? "Window delete failed");
+      setWindowMessage("Window deleted");
+      await loadWindows();
+      resetWindowForm();
+    } catch (e: any) {
+      setWindowMessage(e?.message ?? "Window delete failed");
+    } finally {
+      setWindowBusy(false);
+    }
+  };
+
+  const saveWindowItems = async () => {
+    if (!windowId) return;
+    setWindowBusy(true);
+    setWindowMessage(null);
+    try {
+      const item_ids = windowItemIdsCsv
+        .split(",")
+        .map((x) => x.trim())
+        .filter(Boolean);
+      const res = await fetch(`/api/admin/menu/windows/${windowId}/items`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ item_ids }),
+      });
+      const data = await res.json();
+      if (!res.ok) throw new Error(data?.detail ?? data?.error ?? "Window items save failed");
+      setWindowMessage("Window items updated");
+      await loadWindows();
+    } catch (e: any) {
+      setWindowMessage(e?.message ?? "Window items save failed");
+    } finally {
+      setWindowBusy(false);
     }
   };
 
@@ -303,6 +493,16 @@ export function AdminDashboardClient() {
               {busy ? "Sending…" : "Run chaos"}
             </button>
           </div>
+        </div>
+
+        <div className="mt-3">
+          <button
+            onClick={recoverAllServices}
+            disabled={busy}
+            className="rounded-xl border border-zinc-300 px-4 py-2 text-sm text-zinc-900 hover:bg-zinc-100 disabled:opacity-60 dark:border-zinc-800 dark:text-zinc-100 dark:hover:bg-zinc-900"
+          >
+            {busy ? "Recovering…" : "Recover all services"}
+          </button>
         </div>
 
         {toast && (
@@ -418,6 +618,155 @@ export function AdminDashboardClient() {
                         {item.available ? "Hide" : "Show"}
                       </button>
                     </div>
+                  </td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      </div>
+
+      <div className="mt-6 rounded-2xl border border-zinc-200 bg-zinc-50 p-4 dark:border-zinc-900 dark:bg-zinc-950">
+        <div className="text-sm font-medium">Menu Windows (Iftar/Saheri)</div>
+        <p className="mt-2 text-sm text-zinc-600 dark:text-zinc-400">
+          Define Ramadan time windows and assign menu item IDs (comma-separated).
+        </p>
+
+        <div className="mt-4 grid grid-cols-1 gap-3 sm:grid-cols-4">
+          <select
+            value={windowName}
+            onChange={(e) => setWindowName(e.target.value as "iftar" | "saheri")}
+            className="rounded-xl border border-zinc-300 bg-white px-3 py-2 text-sm text-zinc-900 outline-none focus:border-zinc-500 dark:border-zinc-800 dark:bg-zinc-950 dark:text-zinc-100 dark:focus:border-zinc-600"
+          >
+            <option value="iftar">iftar</option>
+            <option value="saheri">saheri</option>
+          </select>
+          <input
+            value={windowStartDate}
+            onChange={(e) => setWindowStartDate(e.target.value)}
+            type="date"
+            className="rounded-xl border border-zinc-300 bg-white px-3 py-2 text-sm text-zinc-900 outline-none focus:border-zinc-500 dark:border-zinc-800 dark:bg-zinc-950 dark:text-zinc-100 dark:focus:border-zinc-600"
+          />
+          <input
+            value={windowEndDate}
+            onChange={(e) => setWindowEndDate(e.target.value)}
+            type="date"
+            className="rounded-xl border border-zinc-300 bg-white px-3 py-2 text-sm text-zinc-900 outline-none focus:border-zinc-500 dark:border-zinc-800 dark:bg-zinc-950 dark:text-zinc-100 dark:focus:border-zinc-600"
+          />
+          <label className="flex items-center gap-2 rounded-xl border border-zinc-300 bg-white px-3 py-2 text-sm text-zinc-900 dark:border-zinc-800 dark:bg-zinc-950 dark:text-zinc-100">
+            <input type="checkbox" checked={windowActive} onChange={(e) => setWindowActive(e.target.checked)} />
+            Active
+          </label>
+        </div>
+
+        <div className="mt-3 grid grid-cols-1 gap-3 sm:grid-cols-4">
+          <input
+            value={windowStartTime}
+            onChange={(e) => setWindowStartTime(e.target.value)}
+            type="time"
+            className="rounded-xl border border-zinc-300 bg-white px-3 py-2 text-sm text-zinc-900 outline-none focus:border-zinc-500 dark:border-zinc-800 dark:bg-zinc-950 dark:text-zinc-100 dark:focus:border-zinc-600"
+          />
+          <input
+            value={windowEndTime}
+            onChange={(e) => setWindowEndTime(e.target.value)}
+            type="time"
+            className="rounded-xl border border-zinc-300 bg-white px-3 py-2 text-sm text-zinc-900 outline-none focus:border-zinc-500 dark:border-zinc-800 dark:bg-zinc-950 dark:text-zinc-100 dark:focus:border-zinc-600"
+          />
+          <input
+            value={windowTimezone}
+            onChange={(e) => setWindowTimezone(e.target.value)}
+            placeholder="Timezone"
+            className="rounded-xl border border-zinc-300 bg-white px-3 py-2 text-sm text-zinc-900 outline-none focus:border-zinc-500 dark:border-zinc-800 dark:bg-zinc-950 dark:text-zinc-100 dark:focus:border-zinc-600"
+          />
+          <input
+            value={windowItemIdsCsv}
+            onChange={(e) => setWindowItemIdsCsv(e.target.value)}
+            placeholder="Item IDs (e.g. 1,2)"
+            className="rounded-xl border border-zinc-300 bg-white px-3 py-2 text-sm text-zinc-900 outline-none focus:border-zinc-500 dark:border-zinc-800 dark:bg-zinc-950 dark:text-zinc-100 dark:focus:border-zinc-600"
+          />
+        </div>
+
+        <div className="mt-3 flex flex-wrap gap-2">
+          <button
+            onClick={createWindow}
+            disabled={windowBusy}
+            className="rounded-xl bg-zinc-900 px-4 py-2 text-sm font-medium text-white hover:bg-zinc-800 disabled:opacity-60"
+          >
+            Create window
+          </button>
+          <button
+            onClick={updateWindow}
+            disabled={windowBusy || !windowId}
+            className="rounded-xl border border-zinc-300 px-4 py-2 text-sm text-zinc-900 hover:bg-zinc-100 disabled:opacity-60 dark:border-zinc-800 dark:text-zinc-100 dark:hover:bg-zinc-900"
+          >
+            Update selected
+          </button>
+          <button
+            onClick={saveWindowItems}
+            disabled={windowBusy || !windowId}
+            className="rounded-xl border border-zinc-300 px-4 py-2 text-sm text-zinc-900 hover:bg-zinc-100 disabled:opacity-60 dark:border-zinc-800 dark:text-zinc-100 dark:hover:bg-zinc-900"
+          >
+            Save items
+          </button>
+          <button
+            onClick={deleteWindow}
+            disabled={windowBusy || !windowId}
+            className="rounded-xl border border-red-300 px-4 py-2 text-sm text-red-700 hover:bg-red-50 disabled:opacity-60 dark:border-red-800 dark:text-red-300 dark:hover:bg-red-900/30"
+          >
+            Delete selected
+          </button>
+          <button
+            onClick={resetWindowForm}
+            disabled={windowBusy}
+            className="rounded-xl border border-zinc-300 px-4 py-2 text-sm text-zinc-900 hover:bg-zinc-100 disabled:opacity-60 dark:border-zinc-800 dark:text-zinc-100 dark:hover:bg-zinc-900"
+          >
+            Clear form
+          </button>
+        </div>
+
+        {windowMessage && (
+          <div className="mt-3 rounded-xl border border-zinc-300 bg-white px-3 py-2 text-sm text-zinc-700 dark:border-zinc-800 dark:bg-zinc-950 dark:text-zinc-200">
+            {windowMessage}
+          </div>
+        )}
+
+        <div className="mt-4 overflow-x-auto">
+          <table className="w-full text-sm">
+            <thead>
+              <tr className="text-left text-zinc-600 dark:text-zinc-400">
+                <th className="py-2 pr-3">ID</th>
+                <th className="py-2 pr-3">Name</th>
+                <th className="py-2 pr-3">Dates</th>
+                <th className="py-2 pr-3">Times</th>
+                <th className="py-2 pr-3">Items</th>
+                <th className="py-2 pr-3">Actions</th>
+              </tr>
+            </thead>
+            <tbody>
+              {windows.map((w) => (
+                <tr key={w.id} className="border-t border-zinc-200 dark:border-zinc-900">
+                  <td className="py-2 pr-3">{w.id}</td>
+                  <td className="py-2 pr-3">{w.name}</td>
+                  <td className="py-2 pr-3">{w.start_date} to {w.end_date}</td>
+                  <td className="py-2 pr-3">{w.start_time.slice(0, 5)} to {w.end_time.slice(0, 5)}</td>
+                  <td className="py-2 pr-3">{w.item_ids.join(", ") || "-"}</td>
+                  <td className="py-2 pr-3">
+                    <button
+                      onClick={() => {
+                        setWindowId(String(w.id));
+                        setWindowName(w.name);
+                        setWindowStartDate(w.start_date);
+                        setWindowEndDate(w.end_date);
+                        setWindowStartTime(w.start_time.slice(0, 5));
+                        setWindowEndTime(w.end_time.slice(0, 5));
+                        setWindowTimezone(w.timezone);
+                        setWindowActive(w.is_active);
+                        setWindowItemIdsCsv(w.item_ids.join(","));
+                      }}
+                      className="rounded-lg border border-zinc-300 px-2 py-1 text-xs hover:bg-zinc-100 dark:border-zinc-800 dark:hover:bg-zinc-900"
+                    >
+                      Select
+                    </button>
                   </td>
                 </tr>
               ))}

@@ -63,7 +63,11 @@ interface LoginResponse {
   };
 }
 
+export type MenuContext = "auto" | "regular" | "iftar" | "saheri";
+
 interface MenuResponse {
+  active_context?: Exclude<MenuContext, "auto">;
+  next_change_at?: string | null;
   items: MenuItem[];
 }
 
@@ -166,8 +170,13 @@ async function makeMockRequest<T>(
     return { ok: true } as T;
   }
 
-  if (method === "GET" && endpoint === "/menu") {
+  if (method === "GET" && endpoint.startsWith("/menu")) {
+    const contextMatch = endpoint.match(/[?&]context=(auto|regular|iftar|saheri)/);
+    const context = (contextMatch?.[1] as MenuContext | undefined) ?? "auto";
+    const activeContext = context === "auto" ? "regular" : context;
     return {
+      active_context: activeContext,
+      next_change_at: null,
       items: [
         {
           id: "1",
@@ -262,8 +271,8 @@ export async function logout(): Promise<{ ok: boolean }> {
   return makeRequest<{ ok: boolean }>("POST", "/auth/logout");
 }
 
-export async function getMenu(): Promise<MenuResponse> {
-  return makeRequest<MenuResponse>("GET", "/menu");
+export async function getMenu(context: MenuContext = "auto"): Promise<MenuResponse> {
+  return makeRequest<MenuResponse>("GET", `/menu?context=${encodeURIComponent(context)}`);
 }
 
 export async function createOrder(
