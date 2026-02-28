@@ -1,0 +1,67 @@
+name: CI
+
+on:
+  push:
+    branches: ["main"]
+  pull_request:
+
+jobs:
+  frontend-checks:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+          cache: "npm"
+          cache-dependency-path: |
+            apps/web/package-lock.json
+            apps/mobile/package-lock.json
+
+      - name: Web install
+        working-directory: apps/web
+        run: npm ci
+
+      - name: Web lint
+        working-directory: apps/web
+        run: npm run lint
+
+      - name: Mobile install
+        working-directory: apps/mobile
+        run: npm ci
+
+      - name: Mobile lint
+        working-directory: apps/mobile
+        run: npm run lint
+
+      - name: Mobile typecheck
+        working-directory: apps/mobile
+        run: npx tsc --noEmit
+
+  integration-health:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Start stack
+        run: docker compose -f infra/docker-compose.yml up -d --build
+
+      - name: Wait for services
+        run: sleep 20
+
+      - name: Health check
+        run: |
+          chmod +x scripts/health-check.sh
+          ./scripts/health-check.sh | tee /tmp/health.log
+          if grep -q "FAIL (" /tmp/health.log; then
+            echo "Health check reported failures"
+            exit 1
+          fi
+
+      - name: Stop stack
+        if: always()
+        run: docker compose -f infra/docker-compose.yml down -v

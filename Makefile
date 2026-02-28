@@ -24,3 +24,12 @@ db-restore:
 
 db-test:
 	./database/run-db-tests.sh
+
+db-reset:
+	./scripts/db-reset.sh
+
+demo-seed:
+	./scripts/demo-seed.sh
+
+smoke-test:
+	./scripts/smoke-test.sh
