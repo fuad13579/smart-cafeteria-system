@@ -15,3 +15,12 @@ ps:
 
 logs:
 	docker compose -f infra/docker-compose.yml logs -f --tail=200
+
+db-backup:
+	./scripts/db-backup.sh
+
+db-restore:
+	./scripts/db-restore.sh $(FILE)
+
+db-test:
+	./database/run-db-tests.sh

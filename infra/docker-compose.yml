@@ -9,6 +9,7 @@ services:
       - "5432:5432"
     volumes:
       - pgdata:/var/lib/postgresql/data
+      - ../database:/docker-entrypoint-initdb.d:ro
     networks: [backend]
     restart: unless-stopped
     healthcheck:
@@ -51,6 +52,8 @@ services:
     networks: [backend]
     restart: unless-stopped
     depends_on:
+      postgres:
+        condition: service_healthy
       redis:
         condition: service_healthy
     healthcheck:
@@ -66,6 +69,8 @@ services:
     networks: [backend]
     restart: unless-stopped
     depends_on:
+      postgres:
+        condition: service_healthy
       redis:
         condition: service_healthy
       rabbitmq:
