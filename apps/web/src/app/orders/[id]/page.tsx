@@ -3,7 +3,7 @@
 import { useEffect, useState } from "react";
 import Link from "next/link";
 import { useParams } from "next/navigation";
-import { getOrder, type OrderStatus } from "@/lib/api";
+import { getMyOrders, getOrder, type OrderStatus } from "@/lib/api";
 
 const steps: OrderStatus[] = [
   "QUEUED",
@@ -39,7 +39,9 @@ export default function OrderPage() {
       if (!orderId) return;
       if (showLoading) setLoading(true);
       try {
-        const res = await getOrder(orderId);
+        const mine = await getMyOrders();
+        const fromList = mine.orders.find((o) => o.order_id === orderId);
+        const res = fromList ?? (await getOrder(orderId));
         if (cancelled) return;
         setErr(null);
         setStatus(res.status);

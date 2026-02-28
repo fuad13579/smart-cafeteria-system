@@ -31,6 +31,29 @@ class LoginRequest(BaseModel):
     password: str
 
 
+def _fetch_user(student_id: str) -> dict | None:
+    with _db_conn() as conn:
+        with conn.cursor() as cur:
+            cur.execute(
+                """
+                SELECT student_id, full_name, account_balance
+                FROM students
+                WHERE student_id = %s AND is_active = TRUE
+                """,
+                (student_id,),
+            )
+            row = cur.fetchone()
+            if not row:
+                return None
+            return {
+                "id": row[0],
+                "student_id": row[0],
+                "name": row[1],
+                "account_balance": row[2],
+                "role": _resolve_role(row[0]),
+            }
+
+
 def _jwt_secret() -> str:
     return os.getenv("JWT_SECRET", "dev-only-change-me")
 
@@ -106,7 +129,7 @@ def login(payload: LoginRequest):
                     detail={"message": "Invalid student ID or password", "error": "Unauthorized"},
                 )
 
-            student_id, full_name, account_balance = row
+            student_id, _, _ = row
             token = _create_access_token(student_id)
             cur.execute(
                 "INSERT INTO auth_tokens(token, student_id) VALUES (%s, %s)",
@@ -114,15 +137,13 @@ def login(payload: LoginRequest):
             )
             conn.commit()
 
+    user = _fetch_user(student_id)
+    if not user:
+        raise HTTPException(status_code=401, detail="User not found")
+
     return {
         "access_token": token,
-        "user": {
-            "id": student_id,
-            "student_id": student_id,
-            "name": full_name,
-            "account_balance": account_balance,
-            "role": _resolve_role(student_id),
-        },
+        "user": user,
     }
 
 
@@ -186,3 +207,24 @@ def refresh_token(authorization: str | None = Header(default=None)):
             conn.commit()
 
     return {"access_token": new_token}
+
+
+@app.get("/me")
+def me(authorization: str | None = Header(default=None)):
+    if not authorization or not authorization.startswith("Bearer "):
+        raise HTTPException(status_code=401, detail="Missing bearer token")
+
+    token = authorization.split(" ", 1)[1].strip()
+    if not token:
+        raise HTTPException(status_code=401, detail="Missing bearer token")
+
+    claims = _decode_access_token(token)
+    student_id = claims.get("sub")
+    if not student_id:
+        raise HTTPException(status_code=401, detail="Invalid token payload")
+
+    user = _fetch_user(student_id)
+    if not user:
+        raise HTTPException(status_code=401, detail="User not found")
+
+    return {"user": user}

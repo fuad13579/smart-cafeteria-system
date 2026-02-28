@@ -1,5 +1,3 @@
-import { getToken } from "./storage";
-
 type ApiMode = "mock" | "real";
 type MockScenario = "success" | "timeout" | "unauthorized" | "server_error";
 
@@ -55,12 +53,13 @@ export type OrderStatus =
   | "CANCELLED";
 
 interface LoginResponse {
-  access_token: string;
+  access_token?: string;
   user: {
     name: string;
     id: string;
     student_id?: string;
     account_balance?: number;
+    role?: string;
   };
 }
 
@@ -81,6 +80,10 @@ export interface OrderDetails {
   student_id?: string;
   total_amount?: number;
   created_at?: string;
+}
+
+export interface OrdersMeResponse {
+  orders: OrderDetails[];
 }
 
 function parseApiErrorMessage(raw: any, status: number): string {
@@ -132,6 +135,34 @@ async function makeMockRequest<T>(
     } as T;
   }
 
+  if (method === "POST" && endpoint === "/auth/login") {
+    const studentId = body?.student_id || "2100000";
+    return {
+      access_token: "mock-token",
+      user: {
+        name: "Mock User",
+        id: studentId,
+        student_id: studentId,
+        account_balance: 1250,
+      },
+    } as T;
+  }
+
+  if (method === "GET" && endpoint === "/auth/me") {
+    return {
+      user: {
+        name: "Mock User",
+        id: "2100000",
+        student_id: "2100000",
+        account_balance: 1250,
+      },
+    } as T;
+  }
+
+  if (method === "POST" && endpoint === "/auth/logout") {
+    return { ok: true } as T;
+  }
+
   if (method === "GET" && endpoint === "/menu") {
     return {
       items: [
@@ -156,6 +187,21 @@ async function makeMockRequest<T>(
     return mockOrderFromId(orderId) as T;
   }
 
+  if (method === "GET" && endpoint === "/orders/me") {
+    const now = Date.now();
+    return {
+      orders: [
+        {
+          order_id: String(now),
+          status: "QUEUED",
+          eta_minutes: 12,
+          total_amount: 120,
+          created_at: new Date(now).toISOString(),
+        },
+      ],
+    } as T;
+  }
+
   throw new Error(`Mock endpoint not implemented: ${method} ${endpoint}`);
 }
 
@@ -172,14 +218,10 @@ async function makeRequest<T>(
     "Content-Type": "application/json",
   };
 
-  const token = getToken();
-  if (token) {
-    headers["Authorization"] = `Bearer ${token}`;
-  }
-
   const response = await fetch(resolveUrl(endpoint), {
     method,
     headers,
+    credentials: "include",
     body: body ? JSON.stringify(body) : undefined,
   });
 
@@ -195,10 +237,18 @@ export async function login(
   studentId: string,
   password: string
 ): Promise<LoginResponse> {
-  return makeRequest<LoginResponse>("POST", "/login", {
+  return makeRequest<LoginResponse>("POST", "/auth/login", {
     student_id: studentId,
     password,
   });
+}
+
+export async function me(): Promise<{ user: LoginResponse["user"] }> {
+  return makeRequest<{ user: LoginResponse["user"] }>("GET", "/auth/me");
+}
+
+export async function logout(): Promise<{ ok: boolean }> {
+  return makeRequest<{ ok: boolean }>("POST", "/auth/logout");
 }
 
 export async function getMenu(): Promise<MenuResponse> {
@@ -215,4 +265,8 @@ export async function createOrder(
 
 export async function getOrder(orderId: string): Promise<OrderDetails> {
   return makeRequest<OrderDetails>("GET", `/orders/${orderId}`);
+}
+
+export async function getMyOrders(): Promise<OrdersMeResponse> {
+  return makeRequest<OrdersMeResponse>("GET", "/orders/me");
 }

@@ -1,8 +1,8 @@
 "use client";
 
 import { useEffect, useState } from "react";
-import { login } from "@/lib/api";
-import { clearCart, clearToken, clearUser, getUser, setToken, setUser, type User } from "@/lib/storage";
+import { login, logout as logoutSession } from "@/lib/api";
+import { clearCart, clearUser, getUser, setUser, type User } from "@/lib/storage";
 import Link from "next/link";
 
 export default function LoginPage() {
@@ -22,7 +22,6 @@ export default function LoginPage() {
     setBusy(true);
     try {
       const res = await login(studentId.trim(), password);
-      setToken(res.access_token);
       setUser(res.user);
       setCurrentUser(res.user);
     } catch (ex: any) {
@@ -32,8 +31,10 @@ export default function LoginPage() {
     }
   };
 
-  const logout = () => {
-    clearToken();
+  const logout = async () => {
+    try {
+      await logoutSession();
+    } catch {}
     clearUser();
     clearCart();
     setCurrentUser(null);

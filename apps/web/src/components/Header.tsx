@@ -70,6 +70,7 @@ export function Header() {
         <nav className="flex items-center gap-2">
           <NavLink href="/menu" label="Menu" />
           <NavLink href="/cart" label={`Cart (${cartCount})`} />
+          <NavLink href="/orders" label="Orders" />
 
           <NavLink href="/login" label="Login" />
 

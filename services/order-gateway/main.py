@@ -8,11 +8,20 @@ from typing import Any
 import httpx
 import pika
 import psycopg
-from fastapi import FastAPI, Header, HTTPException
+from fastapi import Cookie, FastAPI, Header, HTTPException, Response
+from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 from pydantic import BaseModel, Field
 
 app = FastAPI()
+_cors_origins = [x.strip() for x in os.getenv("CORS_ALLOWED_ORIGINS", "http://localhost:3000").split(",") if x.strip()]
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=_cors_origins,
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
 
 metrics: dict[str, float] = {
     "login_proxy_total": 0,
@@ -27,6 +36,7 @@ service_started_at = time.time()
 chaos_state = {"enabled": False, "mode": "error"}
 stock_cache: dict[str, tuple[float, bool]] = {}
 stock_cache_lock = threading.Lock()
+ACCESS_COOKIE_NAME = os.getenv("ACCESS_COOKIE_NAME", "access_token")
 
 
 def _stock_cache_ttl_seconds() -> float:
@@ -36,6 +46,19 @@ def _stock_cache_ttl_seconds() -> float:
         return value if value > 0 else 3.0
     except ValueError:
         return 3.0
+
+
+def _jwt_exp_minutes() -> int:
+    raw = os.getenv("JWT_EXPIRES_MINUTES", "60")
+    try:
+        value = int(raw)
+        return value if value > 0 else 60
+    except ValueError:
+        return 60
+
+
+def _cookie_secure() -> bool:
+    return os.getenv("COOKIE_SECURE", "false").lower() == "true"
 
 
 def _db_conn():
@@ -91,11 +114,17 @@ class ChaosRequest(BaseModel):
     mode: str = "error"
 
 
-def _extract_student_id(authorization: str | None) -> str | None:
-    if not authorization or not authorization.startswith("Bearer "):
-        return None
+def _extract_token(authorization: str | None, cookie_token: str | None) -> str | None:
+    if authorization and authorization.startswith("Bearer "):
+        token = authorization.split(" ", 1)[1].strip()
+        if token:
+            return token
+    if cookie_token and cookie_token.strip():
+        return cookie_token.strip()
+    return None
 
-    token = authorization.split(" ", 1)[1].strip()
+
+def _verify_token(token: str) -> dict | None:
     if not token:
         return None
 
@@ -106,14 +135,47 @@ def _extract_student_id(authorization: str | None) -> str | None:
         raise HTTPException(status_code=503, detail="Identity service unavailable")
 
     if resp.status_code == 200:
-        body = resp.json()
-        student_id = body.get("student_id")
-        return student_id if isinstance(student_id, str) and student_id else None
+        return resp.json()
 
     if resp.status_code in {401, 403}:
         return None
 
     raise HTTPException(status_code=503, detail="Identity verification failed")
+
+
+def _extract_auth(authorization: str | None, cookie_token: str | None) -> dict | None:
+    token = _extract_token(authorization, cookie_token)
+    if not token:
+        return None
+    verified = _verify_token(token)
+    if not verified:
+        return None
+    student_id = verified.get("student_id")
+    if not isinstance(student_id, str) or not student_id:
+        return None
+    return {"student_id": student_id, "role": verified.get("role", "student"), "token": token}
+
+
+def _fetch_user(student_id: str) -> dict | None:
+    with _db_conn() as conn:
+        with conn.cursor() as cur:
+            cur.execute(
+                """
+                SELECT student_id, full_name, account_balance
+                FROM students
+                WHERE student_id = %s AND is_active = TRUE
+                """,
+                (student_id,),
+            )
+            row = cur.fetchone()
+            if not row:
+                return None
+            return {
+                "id": row[0],
+                "student_id": row[0],
+                "name": row[1],
+                "account_balance": row[2],
+            }
 
 
 def _reserve_item(order_id: str, item_id: str, qty: int) -> None:
@@ -300,7 +362,7 @@ def chaos_fail(payload: ChaosRequest):
 
 
 @app.post("/api/login")
-def login(payload: LoginRequest):
+def login(payload: LoginRequest, response: Response):
     _should_fail()
     metrics["login_proxy_total"] += 1
 
@@ -315,32 +377,90 @@ def login(payload: LoginRequest):
                 if isinstance(detail, dict):
                     detail = detail.get("message", "Login failed")
                 return JSONResponse(status_code=resp.status_code, content={"message": detail or "Login failed", "error": "Unauthorized"})
-            return resp.json()
+            body = resp.json()
+            token = body.get("access_token")
+            if isinstance(token, str) and token:
+                response.set_cookie(
+                    key=ACCESS_COOKIE_NAME,
+                    value=token,
+                    httponly=True,
+                    samesite="lax",
+                    secure=_cookie_secure(),
+                    max_age=_jwt_exp_minutes() * 60,
+                    path="/",
+                )
+            return body
     except Exception as exc:
         return JSONResponse(status_code=503, content={"message": f"Identity service unavailable: {exc}", "error": "Service Unavailable"})
 
 
+@app.post("/api/auth/login")
+def auth_login(payload: LoginRequest, response: Response):
+    return login(payload, response)
+
+
 @app.post("/api/refresh")
-def refresh(authorization: str | None = Header(default=None)):
-    if not authorization:
+def refresh(
+    response: Response,
+    authorization: str | None = Header(default=None),
+    access_token: str | None = Cookie(default=None, alias=ACCESS_COOKIE_NAME),
+):
+    token = _extract_token(authorization, access_token)
+    if not token:
         raise HTTPException(status_code=401, detail="Missing or invalid token")
     try:
         with httpx.Client(timeout=5) as client:
-            resp = client.post(f"{_identity_url()}/refresh", headers={"Authorization": authorization})
+            resp = client.post(f"{_identity_url()}/refresh", headers={"Authorization": f"Bearer {token}"})
             if resp.status_code >= 400:
                 raise HTTPException(status_code=401, detail="Missing or invalid token")
-            return resp.json()
+            body = resp.json()
+            refreshed = body.get("access_token")
+            if isinstance(refreshed, str) and refreshed:
+                response.set_cookie(
+                    key=ACCESS_COOKIE_NAME,
+                    value=refreshed,
+                    httponly=True,
+                    samesite="lax",
+                    secure=_cookie_secure(),
+                    max_age=_jwt_exp_minutes() * 60,
+                    path="/",
+                )
+            return body
     except HTTPException:
         raise
     except Exception as exc:
         raise HTTPException(status_code=503, detail=f"Identity service unavailable: {exc}") from exc
 
 
+@app.get("/api/auth/me")
+def auth_me(
+    authorization: str | None = Header(default=None),
+    access_token: str | None = Cookie(default=None, alias=ACCESS_COOKIE_NAME),
+):
+    auth = _extract_auth(authorization, access_token)
+    if not auth:
+        raise HTTPException(status_code=401, detail="Missing or invalid token")
+    user = _fetch_user(auth["student_id"])
+    if not user:
+        raise HTTPException(status_code=401, detail="User not found")
+    user["role"] = auth.get("role", "student")
+    return {"user": user}
+
+
+@app.post("/api/auth/logout")
+def auth_logout(response: Response):
+    response.delete_cookie(key=ACCESS_COOKIE_NAME, path="/")
+    return {"ok": True}
+
+
 @app.get("/api/menu")
-def get_menu(authorization: str | None = Header(default=None)):
+def get_menu(
+    authorization: str | None = Header(default=None),
+    access_token: str | None = Cookie(default=None, alias=ACCESS_COOKIE_NAME),
+):
     _should_fail()
-    student_id = _extract_student_id(authorization)
-    if not student_id:
+    auth = _extract_auth(authorization, access_token)
+    if not auth:
         raise HTTPException(status_code=401, detail="Missing or invalid token")
 
     with _db_conn() as conn:
@@ -364,6 +484,7 @@ def get_menu(authorization: str | None = Header(default=None)):
 def create_order(
     payload: CreateOrderRequest,
     authorization: str | None = Header(default=None),
+    access_token: str | None = Cookie(default=None, alias=ACCESS_COOKIE_NAME),
     idempotency_key: str | None = Header(default=None, alias="Idempotency-Key"),
 ):
     start = time.perf_counter()
@@ -373,10 +494,11 @@ def create_order(
         metrics["orders_failed_total"] += 1
         return JSONResponse(status_code=400, content={"message": "Order items are required", "error": "Bad Request"})
 
-    student_id = _extract_student_id(authorization)
-    if not student_id:
+    auth = _extract_auth(authorization, access_token)
+    if not auth:
         metrics["orders_failed_total"] += 1
         raise HTTPException(status_code=401, detail="Missing or invalid token")
+    student_id = auth["student_id"]
 
     key = (idempotency_key or "").strip()
     if key:
@@ -465,11 +587,19 @@ def create_order(
 
 
 @app.get("/api/orders/{order_id}")
-def get_order(order_id: str, authorization: str | None = Header(default=None)):
+def get_order(
+    order_id: str,
+    authorization: str | None = Header(default=None),
+    access_token: str | None = Cookie(default=None, alias=ACCESS_COOKIE_NAME),
+):
     _should_fail()
-    student_id = _extract_student_id(authorization)
-    if not student_id:
+    if order_id == "me":
+        return get_my_orders(authorization=authorization, access_token=access_token)
+
+    auth = _extract_auth(authorization, access_token)
+    if not auth:
         raise HTTPException(status_code=401, detail="Missing or invalid token")
+    student_id = auth["student_id"]
 
     with _db_conn() as conn:
         with conn.cursor() as cur:
@@ -488,3 +618,41 @@ def get_order(order_id: str, authorization: str | None = Header(default=None)):
                 "total_amount": row[4],
                 "created_at": row[5].isoformat() if row[5] else None,
             }
+
+
+@app.get("/api/orders/me")
+def get_my_orders(
+    authorization: str | None = Header(default=None),
+    access_token: str | None = Cookie(default=None, alias=ACCESS_COOKIE_NAME),
+):
+    _should_fail()
+    auth = _extract_auth(authorization, access_token)
+    if not auth:
+        raise HTTPException(status_code=401, detail="Missing or invalid token")
+    student_id = auth["student_id"]
+
+    with _db_conn() as conn:
+        with conn.cursor() as cur:
+            cur.execute(
+                """
+                SELECT id, status, eta_minutes, total_amount, created_at
+                FROM orders
+                WHERE student_id = %s
+                ORDER BY created_at DESC
+                """,
+                (student_id,),
+            )
+            rows = cur.fetchall()
+
+    return {
+        "orders": [
+            {
+                "order_id": row[0],
+                "status": row[1],
+                "eta_minutes": row[2],
+                "total_amount": row[3],
+                "created_at": row[4].isoformat() if row[4] else None,
+            }
+            for row in rows
+        ]
+    }
