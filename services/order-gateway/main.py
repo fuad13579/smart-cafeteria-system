@@ -44,6 +44,11 @@ def _stock_url() -> str:
     return base.rstrip("/")
 
 
+def _payment_url() -> str:
+    base = os.getenv("PAYMENT_SERVICE_URL", "http://payment-service:8000")
+    return base.rstrip("/")
+
+
 def _rabbit_params() -> pika.ConnectionParameters:
     host = os.getenv("RABBITMQ_HOST", "rabbitmq")
     port = int(os.getenv("RABBITMQ_PORT", "5672"))
@@ -109,6 +114,34 @@ def _reserve_item(order_id: str, item_id: str, qty: int) -> None:
         raise HTTPException(status_code=503, detail="Stock service failure")
 
 
+def _release_stock(order_id: str) -> None:
+    payload = {"order_id": order_id}
+    try:
+        with httpx.Client(timeout=1.5) as client:
+            client.post(f"{_stock_url()}/stock/release", json=payload)
+    except Exception:
+        # Best-effort rollback path.
+        return
+
+
+def _charge_payment(order_id: str, student_id: str, amount: float) -> None:
+    payload = {"order_id": order_id, "student_id": student_id, "amount": amount}
+    try:
+        with httpx.Client(timeout=1.5) as client:
+            resp = client.post(f"{_payment_url()}/payments/charge", json=payload)
+    except Exception as exc:
+        raise HTTPException(status_code=503, detail=f"Payment service unavailable: {exc}") from exc
+
+    if resp.status_code == 422:
+        detail = resp.json().get("detail", "Invalid payment request")
+        raise HTTPException(status_code=422, detail=detail)
+    if resp.status_code >= 500:
+        raise HTTPException(status_code=503, detail="Payment service failure")
+    if resp.status_code >= 400:
+        detail = resp.json().get("detail", "Payment failed")
+        raise HTTPException(status_code=402, detail=detail)
+
+
 def _publish_kitchen_job(order: dict[str, Any]) -> None:
     try:
         connection = pika.BlockingConnection(_rabbit_params())
@@ -145,6 +178,14 @@ def health():
                 raise RuntimeError("stock health check failed")
     except Exception as exc:
         raise HTTPException(status_code=503, detail=f"stock unavailable: {exc}")
+
+    try:
+        with httpx.Client(timeout=1.0) as client:
+            payment_resp = client.get(f"{_payment_url()}/health")
+            if payment_resp.status_code != 200:
+                raise RuntimeError("payment health check failed")
+    except Exception as exc:
+        raise HTTPException(status_code=503, detail=f"payment unavailable: {exc}")
 
     try:
         connection = pika.BlockingConnection(_rabbit_params())
@@ -254,9 +295,16 @@ def create_order(payload: CreateOrderRequest, authorization: str | None = Header
             order_id = str(uuid.uuid4())
             total = sum(menu_map[line.id]["price"] * line.qty for line in payload.items)
 
-            # Reserve stock before order insert.
-            for line in payload.items:
-                _reserve_item(order_id=order_id, item_id=line.id, qty=line.qty)
+            try:
+                # Reserve stock before order insert.
+                for line in payload.items:
+                    _reserve_item(order_id=order_id, item_id=line.id, qty=line.qty)
+
+                # Charge payment before creating persistent order rows.
+                _charge_payment(order_id=order_id, student_id=student_id, amount=total)
+            except HTTPException:
+                _release_stock(order_id)
+                raise
 
             status_value = "QUEUED"
             eta_minutes = 12
