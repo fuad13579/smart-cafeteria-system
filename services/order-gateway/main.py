@@ -123,6 +123,16 @@ def _payment_url() -> str:
     return base.rstrip("/")
 
 
+def _kitchen_url() -> str:
+    base = os.getenv("KITCHEN_QUEUE_URL", "http://kitchen-queue:8000")
+    return base.rstrip("/")
+
+
+def _notification_url() -> str:
+    base = os.getenv("NOTIFICATION_HUB_URL", "http://notification-hub:8000")
+    return base.rstrip("/")
+
+
 def _rabbit_params() -> pika.ConnectionParameters:
     host = os.getenv("RABBITMQ_HOST", "rabbitmq")
     port = int(os.getenv("RABBITMQ_PORT", "5672"))
@@ -1379,6 +1389,32 @@ def get_metrics():
     }
 
 
+def _admin_service_health_map() -> dict[str, str]:
+    service_urls = {
+        "identity-provider": f"{_identity_url()}/health",
+        "stock-service": f"{_stock_url()}/health",
+        "kitchen-queue": f"{_kitchen_url()}/health",
+        "notification-hub": f"{_notification_url()}/health",
+        "payment-service": f"{_payment_url()}/health",
+    }
+    results: dict[str, str] = {}
+    with httpx.Client(timeout=1.0) as client:
+        for name, url in service_urls.items():
+            try:
+                response = client.get(url)
+                results[name] = "up" if response.status_code == 200 else "down"
+            except Exception:
+                results[name] = "down"
+    return results
+
+
+@app.get("/admin/health")
+@app.get("/admin/h")
+def admin_health():
+    services = _admin_service_health_map()
+    return {"services": services, "updated_at": datetime.now(timezone.utc).isoformat()}
+
+
 @app.get("/api/admin/metrics")
 def get_admin_metrics():
     uptime_minutes = max((time.time() - service_started_at) / 60.0, 1.0 / 60.0)
@@ -1390,6 +1426,11 @@ def get_admin_metrics():
         "outbox_backlog": _outbox_backlog(),
         "updatedAt": int(time.time()),
     }
+
+
+@app.get("/admin/metrics")
+def get_admin_metrics_alias():
+    return get_admin_metrics()
 
 
 @app.on_event("startup")
