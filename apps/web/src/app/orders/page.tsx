@@ -146,7 +146,8 @@ export default function OrdersPage() {
               </div>
             </div>
             <div className="mt-2 text-xs text-zinc-600 dark:text-zinc-400">
-              Token: #{o.token_no ?? "-"} · ETA: {o.eta_minutes} min · Total: BDT {o.total_amount ?? 0}
+              Token: #{o.token_no ?? "-"} · Counter: {o.pickup_counter ?? "-"} · ETA: {o.eta_minutes} min · Total: BDT {o.total_amount ?? 0}
+              {o.ready_until ? ` · Pickup by: ${new Date(o.ready_until).toLocaleTimeString()}` : ""}
             </div>
           </div>
         ))}

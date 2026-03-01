@@ -74,6 +74,7 @@ export function Header() {
           <NavLink href="/cart" label={`Cart (${cartCount})`} />
           <NavLink href="/wallet" label="Wallet" />
           <NavLink href="/orders" label="Orders" />
+          {currentUser?.role === "admin" && <NavLink href="/kitchen" label="Kitchen" />}
           {currentUser?.role === "admin" && <NavLink href="/admin" label="Admin" />}
 
           <NavLink href="/login" label="Login" />

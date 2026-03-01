@@ -4,7 +4,7 @@ import threading
 import time
 import uuid
 from base64 import b64encode
-from datetime import date, datetime, time as dt_time, timedelta
+from datetime import date, datetime, time as dt_time, timedelta, timezone
 from html import escape
 from io import BytesIO
 from typing import Any
@@ -83,6 +83,15 @@ def _cookie_secure() -> bool:
 
 def _menu_timezone() -> str:
     return os.getenv("MENU_TIMEZONE", "Asia/Dhaka")
+
+
+def _ready_window_minutes() -> int:
+    raw = os.getenv("ORDER_READY_WINDOW_MINUTES", "15")
+    try:
+        value = int(raw)
+        return value if value > 0 else 15
+    except ValueError:
+        return 15
 
 
 def _pickup_counter_label() -> str:
@@ -335,6 +344,14 @@ class WalletWebhookRequest(BaseModel):
 
 class AdminTopupReviewRequest(BaseModel):
     action: str
+
+
+class AdminKitchenStatusRequest(BaseModel):
+    action: str
+
+
+class AdminKitchenPeakModeRequest(BaseModel):
+    peak_mode: bool
 
 
 def _extract_token(authorization: str | None, cookie_token: str | None) -> str | None:
@@ -612,6 +629,36 @@ def _ensure_ramadan_visibility_schema() -> None:
                 """
             )
             conn.commit()
+
+
+def _ensure_kitchen_settings_schema() -> None:
+    with _db_conn() as conn:
+        with conn.cursor() as cur:
+            cur.execute(
+                """
+                CREATE TABLE IF NOT EXISTS kitchen_settings (
+                    id INTEGER PRIMARY KEY CHECK (id = 1),
+                    peak_mode BOOLEAN NOT NULL DEFAULT FALSE,
+                    updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+                )
+                """
+            )
+            cur.execute(
+                """
+                INSERT INTO kitchen_settings(id, peak_mode)
+                VALUES (1, FALSE)
+                ON CONFLICT (id) DO NOTHING
+                """
+            )
+            conn.commit()
+
+
+def _get_peak_mode() -> bool:
+    with _db_conn() as conn:
+        with conn.cursor() as cur:
+            cur.execute("SELECT peak_mode FROM kitchen_settings WHERE id = 1")
+            row = cur.fetchone()
+            return bool(row[0]) if row else False
 
 
 def _get_ramadan_visibility(now_local: datetime) -> dict[str, Any]:
@@ -945,14 +992,18 @@ def _ensure_wallet_schema() -> None:
 def _ensure_order_slip_schema() -> None:
     with _db_conn() as conn:
         with conn.cursor() as cur:
-            cur.execute("CREATE SEQUENCE IF NOT EXISTS order_token_no_seq START WITH 1001 INCREMENT BY 1")
+            cur.execute("CREATE SEQUENCE IF NOT EXISTS order_token_seq START WITH 1001 INCREMENT BY 1")
             cur.execute("ALTER TABLE orders ADD COLUMN IF NOT EXISTS token_no BIGINT")
-            cur.execute("UPDATE orders SET token_no = nextval('order_token_no_seq') WHERE token_no IS NULL")
-            cur.execute("ALTER TABLE orders ALTER COLUMN token_no SET DEFAULT nextval('order_token_no_seq')")
+            cur.execute("UPDATE orders SET token_no = nextval('order_token_seq') WHERE token_no IS NULL")
+            cur.execute("ALTER TABLE orders ALTER COLUMN token_no SET DEFAULT nextval('order_token_seq')")
             cur.execute("ALTER TABLE orders ALTER COLUMN token_no SET NOT NULL")
+            cur.execute("ALTER TABLE orders ADD COLUMN IF NOT EXISTS pickup_counter INTEGER NOT NULL DEFAULT 1")
+            cur.execute("ALTER TABLE orders ADD COLUMN IF NOT EXISTS ready_at TIMESTAMPTZ")
+            cur.execute("ALTER TABLE orders ADD COLUMN IF NOT EXISTS ready_until TIMESTAMPTZ")
             cur.execute("ALTER TABLE orders ADD COLUMN IF NOT EXISTS printed_at TIMESTAMPTZ")
             cur.execute("ALTER TABLE orders ADD COLUMN IF NOT EXISTS slip_version INTEGER NOT NULL DEFAULT 1")
             cur.execute("CREATE UNIQUE INDEX IF NOT EXISTS uq_orders_token_no ON orders(token_no)")
+            cur.execute("CREATE UNIQUE INDEX IF NOT EXISTS ux_orders_token_no ON orders(token_no)")
             conn.commit()
 
 
@@ -1190,7 +1241,7 @@ def _find_idempotent_order(student_id: str, idempotency_key: str) -> dict[str, A
         with conn.cursor() as cur:
             cur.execute(
                 """
-                SELECT o.id, o.token_no, o.status, o.eta_minutes, o.total_amount, o.created_at
+                SELECT o.id, o.token_no, o.pickup_counter, o.ready_at, o.ready_until, o.status, o.eta_minutes, o.total_amount, o.created_at
                 FROM order_idempotency oi
                 JOIN orders o ON o.id = oi.order_id
                 WHERE oi.student_id = %s AND oi.idempotency_key = %s
@@ -1203,10 +1254,13 @@ def _find_idempotent_order(student_id: str, idempotency_key: str) -> dict[str, A
             return {
                 "order_id": row[0],
                 "token_no": int(row[1]),
-                "status": row[2],
-                "eta_minutes": row[3],
-                "total_amount": row[4],
-                "created_at": row[5].isoformat() if row[5] else None,
+                "pickup_counter": int(row[2]),
+                "ready_at": row[3].isoformat() if row[3] else None,
+                "ready_until": row[4].isoformat() if row[4] else None,
+                "status": row[5],
+                "eta_minutes": row[6],
+                "total_amount": row[7],
+                "created_at": row[8].isoformat() if row[8] else None,
                 "idempotent_replay": True,
             }
 
@@ -1230,7 +1284,7 @@ def _load_order_with_items(order_id: str) -> dict[str, Any] | None:
         with conn.cursor() as cur:
             cur.execute(
                 """
-                SELECT id, student_id, token_no, status, eta_minutes, total_amount, created_at, printed_at, slip_version
+                SELECT id, student_id, token_no, pickup_counter, ready_at, ready_until, status, eta_minutes, total_amount, created_at, printed_at, slip_version
                 FROM orders
                 WHERE id = %s
                 """,
@@ -1256,12 +1310,15 @@ def _load_order_with_items(order_id: str) -> dict[str, Any] | None:
         "order_id": row[0],
         "student_id": row[1],
         "token_no": int(row[2]),
-        "status": row[3],
-        "eta_minutes": int(row[4]),
-        "total_amount": int(row[5]),
-        "created_at": row[6],
-        "printed_at": row[7],
-        "slip_version": int(row[8]),
+        "pickup_counter": int(row[3]),
+        "ready_at": row[4],
+        "ready_until": row[5],
+        "status": row[6],
+        "eta_minutes": int(row[7]),
+        "total_amount": int(row[8]),
+        "created_at": row[9],
+        "printed_at": row[10],
+        "slip_version": int(row[11]),
         "items": [
             {
                 "item_id": item[0],
@@ -1338,6 +1395,7 @@ def on_startup():
     _ensure_outbox_schema()
     _ensure_wallet_schema()
     _ensure_order_slip_schema()
+    _ensure_kitchen_settings_schema()
     _ensure_menu_slot_schema()
     _ensure_ramadan_visibility_schema()
     threading.Thread(target=_outbox_worker_loop, daemon=True).start()
@@ -2294,6 +2352,171 @@ def admin_review_topup(
     }
 
 
+@app.get("/api/admin/kitchen/orders")
+def admin_kitchen_orders(
+    authorization: str | None = Header(default=None),
+    access_token: str | None = Cookie(default=None, alias=ACCESS_COOKIE_NAME),
+):
+    _require_admin(authorization, access_token)
+    peak_mode = _get_peak_mode()
+    with _db_conn() as conn:
+        with conn.cursor() as cur:
+            cur.execute(
+                """
+                SELECT
+                    o.id,
+                    o.token_no,
+                    o.pickup_counter,
+                    o.status,
+                    o.eta_minutes,
+                    o.total_amount,
+                    o.ready_until,
+                    o.created_at,
+                    COALESCE(
+                        json_agg(
+                            json_build_object('name', mi.name, 'qty', oi.qty)
+                            ORDER BY oi.id
+                        ) FILTER (WHERE oi.id IS NOT NULL),
+                        '[]'::json
+                    ) AS items_json
+                FROM orders o
+                LEFT JOIN order_items oi ON oi.order_id = o.id
+                LEFT JOIN menu_items mi ON mi.id = oi.item_id
+                WHERE o.status IN ('QUEUED', 'IN_PROGRESS', 'READY')
+                GROUP BY o.id, o.token_no, o.pickup_counter, o.status, o.eta_minutes, o.total_amount, o.ready_until, o.created_at
+                ORDER BY o.created_at ASC
+                LIMIT 200
+                """
+            )
+            rows = cur.fetchall()
+
+    return {
+        "peak_mode": peak_mode,
+        "orders": [
+            {
+                "order_id": row[0],
+                "token_no": int(row[1]),
+                "pickup_counter": int(row[2]),
+                "status": row[3],
+                "eta_minutes": int(row[4]),
+                "total_amount": int(row[5]),
+                "ready_until": row[6].isoformat() if row[6] else None,
+                "created_at": row[7].isoformat() if row[7] else None,
+                "items": row[8] if isinstance(row[8], list) else [],
+            }
+            for row in rows
+        ]
+    }
+
+
+@app.get("/api/admin/kitchen/peak-mode")
+def admin_get_kitchen_peak_mode(
+    authorization: str | None = Header(default=None),
+    access_token: str | None = Cookie(default=None, alias=ACCESS_COOKIE_NAME),
+):
+    _require_admin(authorization, access_token)
+    return {"peak_mode": _get_peak_mode()}
+
+
+@app.put("/api/admin/kitchen/peak-mode")
+def admin_set_kitchen_peak_mode(
+    payload: AdminKitchenPeakModeRequest,
+    authorization: str | None = Header(default=None),
+    access_token: str | None = Cookie(default=None, alias=ACCESS_COOKIE_NAME),
+):
+    _require_admin(authorization, access_token)
+    with _db_conn() as conn:
+        with conn.cursor() as cur:
+            cur.execute(
+                """
+                UPDATE kitchen_settings
+                SET peak_mode = %s, updated_at = NOW()
+                WHERE id = 1
+                """,
+                (payload.peak_mode,),
+            )
+            conn.commit()
+    return {"peak_mode": payload.peak_mode}
+
+
+@app.post("/api/admin/kitchen/orders/{order_id}/status")
+def admin_kitchen_set_status(
+    order_id: str,
+    payload: AdminKitchenStatusRequest,
+    authorization: str | None = Header(default=None),
+    access_token: str | None = Cookie(default=None, alias=ACCESS_COOKIE_NAME),
+):
+    _require_admin(authorization, access_token)
+    action = payload.action.strip().lower()
+    if action not in {"start", "ready", "complete"}:
+        raise HTTPException(status_code=422, detail="action must be start|ready|complete")
+    if not _get_peak_mode():
+        raise HTTPException(status_code=409, detail="Manual kitchen controls are disabled (peak mode is OFF)")
+
+    target_status = "IN_PROGRESS" if action == "start" else ("READY" if action == "ready" else "COMPLETED")
+    expected_current = "QUEUED" if action == "start" else ("IN_PROGRESS" if action == "ready" else "READY")
+    eta = 7 if action == "start" else 0
+    now = datetime.now(timezone.utc)
+    ready_at = now if action == "ready" else None
+    ready_until = now + timedelta(minutes=_ready_window_minutes()) if action == "ready" else None
+
+    with _db_conn() as conn:
+        with conn.cursor() as cur:
+            if action == "ready":
+                cur.execute(
+                    """
+                    UPDATE orders
+                    SET status = %s, eta_minutes = %s, ready_at = %s, ready_until = %s
+                    WHERE id = %s AND status = %s
+                    RETURNING token_no, pickup_counter
+                    """,
+                    (target_status, eta, ready_at, ready_until, order_id, expected_current),
+                )
+            else:
+                cur.execute(
+                    """
+                    UPDATE orders
+                    SET status = %s, eta_minutes = %s
+                    WHERE id = %s AND status = %s
+                    RETURNING token_no, pickup_counter, ready_until
+                    """,
+                    (target_status, eta, order_id, expected_current),
+                )
+            row = cur.fetchone()
+            if not row:
+                raise HTTPException(status_code=409, detail="Invalid status transition")
+            conn.commit()
+
+    token_no = int(row[0])
+    pickup_counter = int(row[1])
+    resolved_ready_until = ready_until if action == "ready" else (row[2] if len(row) > 2 else None)
+    _publish_queue(
+        "order.status",
+        {
+            "event": "order.status.changed",
+            "type": "order.status",
+            "event_id": f"evt-{int(time.time()*1000)}",
+            "occurred_at": datetime.now(timezone.utc).replace(microsecond=0).isoformat().replace("+00:00", "Z"),
+            "order_id": order_id,
+            "from_status": expected_current,
+            "to_status": target_status,
+            "status": target_status,
+            "eta_minutes": eta,
+            "token_no": token_no,
+            "pickup_counter": pickup_counter,
+            "ready_until": resolved_ready_until.isoformat() if resolved_ready_until else None,
+        },
+    )
+    return {
+        "ok": True,
+        "order_id": order_id,
+        "status": target_status,
+        "token_no": token_no,
+        "pickup_counter": pickup_counter,
+        "ready_until": resolved_ready_until.isoformat() if resolved_ready_until else None,
+    }
+
+
 @app.get("/api/menu")
 def get_menu(
     main: str | None = Query(default=None),
@@ -2400,6 +2623,7 @@ def create_order(
     eta_minutes = 12
     reservations_done = False
     total_amount = 0
+    pickup_counter = 1
     payment_method = (payload.payment_method or "CASH").strip().upper()
 
     try:
@@ -2441,12 +2665,13 @@ def create_order(
                     """
                     INSERT INTO orders(id, student_id, status, eta_minutes, total_amount)
                     VALUES (%s, %s, %s, %s, %s)
-                    RETURNING token_no
+                    RETURNING token_no, pickup_counter
                     """,
                     (order_id, student_id, status_value, eta_minutes, total),
                 )
                 token_row = cur.fetchone()
                 token_no = int(token_row[0]) if token_row else None
+                pickup_counter = int(token_row[1]) if token_row else 1
 
                 for line in payload.items:
                     unit_price = menu_map[line.id]["price"]
@@ -2485,6 +2710,8 @@ def create_order(
                 queue_name="kitchen.jobs",
                 payload={
                     "order_id": order_id,
+                    "token_no": token_no,
+                    "pickup_counter": pickup_counter,
                     "student_id": student_id,
                     "status": status_value,
                     "eta_minutes": eta_minutes,
@@ -2506,6 +2733,9 @@ def create_order(
     return {
         "order_id": order_id,
         "token_no": token_no,
+        "pickup_counter": pickup_counter,
+        "ready_at": None,
+        "ready_until": None,
         "status": status_value,
         "eta_minutes": eta_minutes,
         "payment_status": "COMPLETED",
@@ -2530,7 +2760,7 @@ def get_order(
     with _db_conn() as conn:
         with conn.cursor() as cur:
             cur.execute(
-                "SELECT id, student_id, token_no, status, eta_minutes, total_amount, created_at FROM orders WHERE id = %s",
+                "SELECT id, student_id, token_no, pickup_counter, ready_at, ready_until, status, eta_minutes, total_amount, created_at FROM orders WHERE id = %s",
                 (order_id,),
             )
             row = cur.fetchone()
@@ -2543,10 +2773,13 @@ def get_order(
                 "order_id": row[0],
                 "student_id": row[1],
                 "token_no": int(row[2]),
-                "status": row[3],
-                "eta_minutes": row[4],
-                "total_amount": row[5],
-                "created_at": row[6].isoformat() if row[6] else None,
+                "pickup_counter": int(row[3]),
+                "ready_at": row[4].isoformat() if row[4] else None,
+                "ready_until": row[5].isoformat() if row[5] else None,
+                "status": row[6],
+                "eta_minutes": row[7],
+                "total_amount": row[8],
+                "created_at": row[9].isoformat() if row[9] else None,
             }
 
 
@@ -2572,6 +2805,8 @@ def get_order_slip(
 
     created = order["created_at"]
     created_text = created.strftime("%Y-%m-%d %H:%M:%S") if created else "-"
+    ready_until = order.get("ready_until")
+    ready_until_text = ready_until.strftime("%Y-%m-%d %H:%M:%S") if ready_until else "-"
     item_rows = "".join(
         (
             "<tr>"
@@ -2626,7 +2861,9 @@ def get_order_slip(
     <div class="total"><span>Total</span><span>BDT {order['total_amount']}</span></div>
     <div class="status">
       <div>Status: <strong>{escape(order['status'])}</strong></div>
-      <div>Pickup: <strong>{escape(_pickup_counter_label())}</strong></div>
+      <div>Pickup Counter: <strong>{int(order.get('pickup_counter', 1))}</strong></div>
+      <div>Pickup Label: <strong>{escape(_pickup_counter_label())}</strong></div>
+      <div>Ready Until: <strong>{escape(ready_until_text)}</strong></div>
     </div>
     <div class="qr"><img alt="Order QR" src="{qr_data_url}" /></div>
     <div class="foot">{escape(order['order_id'])}</div>
@@ -2709,7 +2946,7 @@ def get_my_orders(
         with conn.cursor() as cur:
             cur.execute(
                 """
-                SELECT id, token_no, status, eta_minutes, total_amount, created_at
+                SELECT id, token_no, pickup_counter, ready_at, ready_until, status, eta_minutes, total_amount, created_at
                 FROM orders
                 WHERE student_id = %s
                 ORDER BY created_at DESC
@@ -2723,10 +2960,13 @@ def get_my_orders(
             {
                 "order_id": row[0],
                 "token_no": int(row[1]),
-                "status": row[2],
-                "eta_minutes": row[3],
-                "total_amount": row[4],
-                "created_at": row[5].isoformat() if row[5] else None,
+                "pickup_counter": int(row[2]),
+                "ready_at": row[3].isoformat() if row[3] else None,
+                "ready_until": row[4].isoformat() if row[4] else None,
+                "status": row[5],
+                "eta_minutes": row[6],
+                "total_amount": row[7],
+                "created_at": row[8].isoformat() if row[8] else None,
             }
             for row in rows
         ]

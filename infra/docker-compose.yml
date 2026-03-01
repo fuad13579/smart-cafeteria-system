@@ -33,6 +33,7 @@ services:
       RESERVE_POOL_TIMEOUT: 2
       QUERY_WAIT_TIMEOUT: 30
       ADMIN_USERS: cafeteria
+      AUTH_TYPE: scram-sha-256
     ports:
       - "6432:5432"
     networks: [backend]
@@ -77,7 +78,7 @@ services:
   identity-provider:
     build: ../services/identity-provider
     environment:
-      POSTGRES_HOST: pgbouncer
+      POSTGRES_HOST: postgres
       POSTGRES_PORT: 5432
       POSTGRES_DB: cafeteria
       POSTGRES_USER: cafeteria
@@ -87,7 +88,7 @@ services:
     networks: [backend]
     restart: unless-stopped
     depends_on:
-      pgbouncer:
+      postgres:
         condition: service_healthy
       redis:
         condition: service_healthy
@@ -100,7 +101,7 @@ services:
   order-gateway:
     build: ../services/order-gateway
     environment:
-      POSTGRES_HOST: pgbouncer
+      POSTGRES_HOST: postgres
       POSTGRES_PORT: 5432
       POSTGRES_DB: cafeteria
       POSTGRES_USER: cafeteria
@@ -110,7 +111,7 @@ services:
     networks: [backend]
     restart: unless-stopped
     depends_on:
-      pgbouncer:
+      postgres:
         condition: service_healthy
       redis:
         condition: service_healthy
@@ -127,7 +128,7 @@ services:
   stock-service:
     build: ../services/stock-service
     environment:
-      POSTGRES_HOST: pgbouncer
+      POSTGRES_HOST: postgres
       POSTGRES_PORT: 5432
       POSTGRES_DB: cafeteria
       POSTGRES_USER: cafeteria
@@ -137,7 +138,7 @@ services:
     networks: [backend]
     restart: unless-stopped
     depends_on:
-      pgbouncer:
+      postgres:
         condition: service_healthy
       redis:
         condition: service_healthy
@@ -150,17 +151,20 @@ services:
   kitchen-queue:
     build: ../services/kitchen-queue
     environment:
-      POSTGRES_HOST: pgbouncer
+      POSTGRES_HOST: postgres
       POSTGRES_PORT: 5432
       POSTGRES_DB: cafeteria
       POSTGRES_USER: cafeteria
       POSTGRES_PASSWORD: cafeteria
+      KITCHEN_CONSUMER_THREADS: 3
+      KITCHEN_PREFETCH_COUNT: 20
+      ORDER_READY_WINDOW_MINUTES: 15
     ports:
       - "8004:8000"
     networks: [backend]
     restart: unless-stopped
     depends_on:
-      pgbouncer:
+      postgres:
         condition: service_healthy
       rabbitmq:
         condition: service_healthy
@@ -175,7 +179,7 @@ services:
   notification-hub:
     build: ../services/notification-hub
     environment:
-      POSTGRES_HOST: pgbouncer
+      POSTGRES_HOST: postgres
       POSTGRES_PORT: 5432
       POSTGRES_DB: cafeteria
       POSTGRES_USER: cafeteria
@@ -185,7 +189,7 @@ services:
     networks: [backend]
     restart: unless-stopped
     depends_on:
-      pgbouncer:
+      postgres:
         condition: service_healthy
       rabbitmq:
         condition: service_healthy
@@ -200,7 +204,7 @@ services:
   payment-service:
     build: ../services/payment-service
     environment:
-      POSTGRES_HOST: pgbouncer
+      POSTGRES_HOST: postgres
       POSTGRES_PORT: 5432
       POSTGRES_DB: cafeteria
       POSTGRES_USER: cafeteria
@@ -210,7 +214,7 @@ services:
     networks: [backend]
     restart: unless-stopped
     depends_on:
-      pgbouncer:
+      postgres:
         condition: service_healthy
       rabbitmq:
         condition: service_healthy

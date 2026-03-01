@@ -34,6 +34,9 @@ export default function OrderPage() {
   const [loading, setLoading] = useState(true);
   const [err, setErr] = useState<string | null>(null);
   const [tokenNo, setTokenNo] = useState<number | null>(null);
+  const [pickupCounter, setPickupCounter] = useState<number | null>(null);
+  const [readyUntil, setReadyUntil] = useState<string | null>(null);
+  const [nowTs, setNowTs] = useState<number>(Date.now());
 
   useEffect(() => {
     let cancelled = false;
@@ -50,6 +53,8 @@ export default function OrderPage() {
         setErr(null);
         setStatus(res.status);
         setTokenNo(typeof res.token_no === "number" ? res.token_no : null);
+        setPickupCounter(typeof res.pickup_counter === "number" ? res.pickup_counter : null);
+        setReadyUntil(typeof res.ready_until === "string" ? res.ready_until : null);
         setEta(Math.max(0, res.eta_minutes ?? 0));
         if (terminalStates.includes(res.status) && pollRef) {
           clearInterval(pollRef);
@@ -98,6 +103,9 @@ export default function OrderPage() {
           const nextStatus = payload?.to_status as OrderStatus | undefined;
           if (!nextStatus) return;
           setStatus(nextStatus);
+          if (typeof payload?.token_no === "number") setTokenNo(payload.token_no);
+          if (typeof payload?.pickup_counter === "number") setPickupCounter(payload.pickup_counter);
+          if (typeof payload?.ready_until === "string") setReadyUntil(payload.ready_until);
           if (typeof payload?.eta_minutes === "number") {
             setEta(Math.max(0, payload.eta_minutes));
           }
@@ -135,6 +143,8 @@ export default function OrderPage() {
         setErr(null);
         setStatus(res.status);
         setTokenNo(typeof res.token_no === "number" ? res.token_no : null);
+        setPickupCounter(typeof res.pickup_counter === "number" ? res.pickup_counter : null);
+        setReadyUntil(typeof res.ready_until === "string" ? res.ready_until : null);
         setEta(Math.max(0, res.eta_minutes ?? 0));
       })
       .catch((e: any) => setErr(e?.message ?? "Failed to load order status"))
@@ -151,6 +161,21 @@ export default function OrderPage() {
     }
   };
 
+  useEffect(() => {
+    const t = setInterval(() => setNowTs(Date.now()), 1000);
+    return () => clearInterval(t);
+  }, []);
+
+  const readyUntilDate = readyUntil ? new Date(readyUntil) : null;
+  const readyDiffSec = readyUntilDate ? Math.floor((readyUntilDate.getTime() - nowTs) / 1000) : null;
+  const readyExpired = status === "READY" && readyDiffSec !== null && readyDiffSec <= 0;
+  const countdownLabel =
+    readyDiffSec !== null && readyDiffSec > 0
+      ? `${Math.floor(readyDiffSec / 60)
+          .toString()
+          .padStart(2, "0")}:${(readyDiffSec % 60).toString().padStart(2, "0")}`
+      : null;
+
   return (
     <div className="mx-auto max-w-xl">
       <div className="flex items-end justify-between gap-3">
@@ -161,6 +186,9 @@ export default function OrderPage() {
           </p>
           <p className="mt-1 text-sm text-zinc-600 dark:text-zinc-400">
             Token <span className="text-zinc-900 dark:text-zinc-200">#{tokenNo ?? "-"}</span>
+          </p>
+          <p className="mt-1 text-sm text-zinc-600 dark:text-zinc-400">
+            Pickup Counter <span className="text-zinc-900 dark:text-zinc-200">{pickupCounter ?? "-"}</span>
           </p>
         </div>
         <div className="flex items-center gap-3">
@@ -204,6 +232,26 @@ export default function OrderPage() {
         <div className="mt-5 rounded-xl border border-zinc-300 bg-white px-3 py-2 text-sm text-zinc-700 dark:border-zinc-800 dark:bg-zinc-950 dark:text-zinc-300">
           Estimated time: <span className="font-medium text-zinc-900 dark:text-white">{eta} min</span>
         </div>
+
+        {status === "READY" && (
+          <div className="mt-3 rounded-xl border border-emerald-300 bg-emerald-50 px-3 py-2 text-sm text-emerald-800 dark:border-emerald-900 dark:bg-emerald-950/30 dark:text-emerald-200">
+            {!readyExpired ? (
+              <>
+                Ready for pickup until{" "}
+                <span className="font-semibold">
+                  {readyUntilDate ? readyUntilDate.toLocaleTimeString() : "-"}
+                </span>
+                {countdownLabel ? (
+                  <span className="ml-2 rounded bg-emerald-100 px-2 py-0.5 text-xs dark:bg-emerald-900/40">
+                    {countdownLabel}
+                  </span>
+                ) : null}
+              </>
+            ) : (
+              <span>Pickup window expired - contact counter.</span>
+            )}
+          </div>
+        )}
 
         <div className="mt-3 text-xs text-zinc-600 dark:text-zinc-500">
           Updates every 4 seconds while order is active.

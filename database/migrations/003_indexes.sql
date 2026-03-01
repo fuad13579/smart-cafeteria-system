@@ -16,3 +16,12 @@ CREATE INDEX IF NOT EXISTS idx_menu_items_available_true
 
 CREATE UNIQUE INDEX IF NOT EXISTS uq_orders_token_no
     ON orders (token_no);
+
+CREATE UNIQUE INDEX IF NOT EXISTS ux_orders_token_no
+    ON orders (token_no);
+
+CREATE INDEX IF NOT EXISTS idx_orders_status_created_at
+    ON orders (status, created_at ASC);
+
+CREATE INDEX IF NOT EXISTS idx_order_items_order_id_id
+    ON order_items (order_id, id);

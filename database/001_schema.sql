@@ -16,6 +16,8 @@ CREATE TABLE IF NOT EXISTS menu_items (
     created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
 
+CREATE SEQUENCE IF NOT EXISTS order_token_seq START WITH 1001 INCREMENT BY 1;
+
 CREATE TABLE IF NOT EXISTS menu_slots (
     id BIGSERIAL PRIMARY KEY,
     main TEXT NOT NULL CHECK (main IN ('regular', 'ramadan')),
@@ -76,7 +78,10 @@ CREATE TABLE IF NOT EXISTS orders (
     status TEXT NOT NULL,
     eta_minutes INTEGER NOT NULL DEFAULT 12,
     total_amount INTEGER NOT NULL DEFAULT 0,
-    token_no BIGINT NOT NULL UNIQUE,
+    token_no BIGINT NOT NULL DEFAULT nextval('order_token_seq') UNIQUE,
+    pickup_counter INTEGER NOT NULL DEFAULT 1,
+    ready_at TIMESTAMPTZ,
+    ready_until TIMESTAMPTZ,
     printed_at TIMESTAMPTZ,
     slip_version INTEGER NOT NULL DEFAULT 1,
     created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()

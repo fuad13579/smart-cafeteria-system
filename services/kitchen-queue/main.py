@@ -3,6 +3,7 @@ import os
 import random
 import threading
 import time
+from datetime import datetime, timedelta, timezone
 
 import pika
 import psycopg
@@ -41,15 +42,64 @@ class ChaosRequest(BaseModel):
     mode: str = "error"
 
 
-def _publish_status(order_id: str, from_status: str, to_status: str, eta_minutes: int) -> None:
+def _ensure_order_ready_schema() -> None:
+    with _db_conn() as conn:
+        with conn.cursor() as cur:
+            cur.execute("ALTER TABLE orders ADD COLUMN IF NOT EXISTS pickup_counter INTEGER NOT NULL DEFAULT 1")
+            cur.execute("ALTER TABLE orders ADD COLUMN IF NOT EXISTS ready_at TIMESTAMPTZ")
+            cur.execute("ALTER TABLE orders ADD COLUMN IF NOT EXISTS ready_until TIMESTAMPTZ")
+            conn.commit()
+
+
+def _ready_window_minutes() -> int:
+    raw = os.getenv("ORDER_READY_WINDOW_MINUTES", "15")
+    try:
+        value = int(raw)
+        return value if value > 0 else 15
+    except ValueError:
+        return 15
+
+
+def _consumer_threads() -> int:
+    raw = os.getenv("KITCHEN_CONSUMER_THREADS", "2")
+    try:
+        value = int(raw)
+        return value if value > 0 else 2
+    except ValueError:
+        return 2
+
+
+def _prefetch_count() -> int:
+    raw = os.getenv("KITCHEN_PREFETCH_COUNT", "20")
+    try:
+        value = int(raw)
+        return value if value > 0 else 20
+    except ValueError:
+        return 20
+
+
+def _publish_status(
+    order_id: str,
+    from_status: str,
+    to_status: str,
+    eta_minutes: int,
+    token_no: int | None = None,
+    pickup_counter: int | None = None,
+    ready_until: datetime | None = None,
+) -> None:
     payload = {
         "event": "order.status.changed",
+        "type": "order.status",
         "event_id": f"evt-{int(time.time()*1000)}",
         "occurred_at": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
         "order_id": order_id,
         "from_status": from_status,
         "to_status": to_status,
+        "status": to_status,
         "eta_minutes": eta_minutes,
+        "token_no": token_no,
+        "pickup_counter": pickup_counter,
+        "ready_until": ready_until.isoformat() if ready_until else None,
     }
 
     connection = pika.BlockingConnection(_rabbit_params())
@@ -64,15 +114,44 @@ def _publish_status(order_id: str, from_status: str, to_status: str, eta_minutes
     connection.close()
 
 
-def _set_order_status(order_id: str, from_status: str, to_status: str, eta_minutes: int) -> bool:
+def _set_order_status(order_id: str, from_status: str, to_status: str, eta_minutes: int) -> dict | None:
+    ready_at = None
+    ready_until = None
+    if to_status == "READY":
+        ready_at = datetime.now(timezone.utc)
+        ready_until = ready_at + timedelta(minutes=_ready_window_minutes())
+
     with _db_conn() as conn:
         with conn.cursor() as cur:
-            cur.execute(
-                "UPDATE orders SET status = %s, eta_minutes = %s WHERE id = %s AND status = %s",
-                (to_status, eta_minutes, order_id, from_status),
-            )
+            if to_status == "READY":
+                cur.execute(
+                    """
+                    UPDATE orders
+                    SET status = %s, eta_minutes = %s, ready_at = %s, ready_until = %s
+                    WHERE id = %s AND status = %s
+                    RETURNING token_no, pickup_counter, ready_until
+                    """,
+                    (to_status, eta_minutes, ready_at, ready_until, order_id, from_status),
+                )
+            else:
+                cur.execute(
+                    """
+                    UPDATE orders
+                    SET status = %s, eta_minutes = %s
+                    WHERE id = %s AND status = %s
+                    RETURNING token_no, pickup_counter, ready_until
+                    """,
+                    (to_status, eta_minutes, order_id, from_status),
+                )
+            row = cur.fetchone()
             conn.commit()
-            return cur.rowcount == 1
+            if not row:
+                return None
+            return {
+                "token_no": int(row[0]) if row[0] is not None else None,
+                "pickup_counter": int(row[1]) if row[1] is not None else None,
+                "ready_until": row[2],
+            }
 
 
 def _process_message(body: bytes) -> None:
@@ -88,46 +167,68 @@ def _process_message(body: bytes) -> None:
         metrics["failures_total"] += 1
         return
 
-    if _set_order_status(order_id, "QUEUED", "IN_PROGRESS", 7):
-        _publish_status(order_id, "QUEUED", "IN_PROGRESS", 7)
+    first = _set_order_status(order_id, "QUEUED", "IN_PROGRESS", 7)
+    if first:
+        _publish_status(
+            order_id,
+            "QUEUED",
+            "IN_PROGRESS",
+            7,
+            token_no=first.get("token_no"),
+            pickup_counter=first.get("pickup_counter"),
+            ready_until=first.get("ready_until"),
+        )
 
     time.sleep(random.randint(3, 7))
 
-    if _set_order_status(order_id, "IN_PROGRESS", "READY", 0):
-        _publish_status(order_id, "IN_PROGRESS", "READY", 0)
+    second = _set_order_status(order_id, "IN_PROGRESS", "READY", 0)
+    if second:
+        _publish_status(
+            order_id,
+            "IN_PROGRESS",
+            "READY",
+            0,
+            token_no=second.get("token_no"),
+            pickup_counter=second.get("pickup_counter"),
+            ready_until=second.get("ready_until"),
+        )
         metrics["orders_processed_total"] += 1
 
 
-def _worker_loop() -> None:
+def _worker_loop(worker_name: str) -> None:
     while worker_state["running"]:
         try:
             connection = pika.BlockingConnection(_rabbit_params())
             channel = connection.channel()
             channel.queue_declare(queue="kitchen.jobs", durable=True)
+            channel.basic_qos(prefetch_count=_prefetch_count())
 
-            method_frame, _, body = channel.basic_get(queue="kitchen.jobs", auto_ack=False)
-            if method_frame is None:
-                connection.close()
-                time.sleep(1)
-                continue
+            def _on_message(ch, method, _props, body):
+                try:
+                    _process_message(body)
+                    ch.basic_ack(delivery_tag=method.delivery_tag)
+                except Exception:
+                    metrics["failures_total"] += 1
+                    ch.basic_nack(delivery_tag=method.delivery_tag, requeue=True)
 
-            try:
-                _process_message(body)
-                channel.basic_ack(delivery_tag=method_frame.delivery_tag)
-            except Exception:
-                metrics["failures_total"] += 1
-                channel.basic_nack(delivery_tag=method_frame.delivery_tag, requeue=True)
-            finally:
-                connection.close()
+            channel.basic_consume(queue="kitchen.jobs", on_message_callback=_on_message, auto_ack=False)
+            channel.start_consuming()
 
         except Exception:
             metrics["failures_total"] += 1
             time.sleep(1)
+        finally:
+            try:
+                connection.close()
+            except Exception:
+                pass
 
 
 @app.on_event("startup")
 def on_startup():
-    threading.Thread(target=_worker_loop, daemon=True).start()
+    _ensure_order_ready_schema()
+    for i in range(_consumer_threads()):
+        threading.Thread(target=_worker_loop, args=(f"worker-{i+1}",), daemon=True).start()
 
 
 @app.on_event("shutdown")

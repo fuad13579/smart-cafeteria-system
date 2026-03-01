@@ -128,6 +128,9 @@ export function AdminDashboardClient() {
   const [walletFilter, setWalletFilter] = useState<"pending" | "success" | "failed" | "all">("pending");
   const [walletBusy, setWalletBusy] = useState(false);
   const [walletMessage, setWalletMessage] = useState<string | null>(null);
+  const [peakMode, setPeakMode] = useState(false);
+  const [peakBusy, setPeakBusy] = useState(false);
+  const [peakMessage, setPeakMessage] = useState<string | null>(null);
 
   const services = useMemo(() => health?.services ?? [], [health]);
 
@@ -191,6 +194,17 @@ export function AdminDashboardClient() {
     }
   }
 
+  async function loadPeakMode() {
+    try {
+      const res = await fetch("/api/admin/kitchen/peak-mode", { cache: "no-store" });
+      const data = await res.json();
+      if (!res.ok) throw new Error(data?.detail ?? data?.error ?? "Failed to load kitchen peak mode");
+      setPeakMode(!!data?.peak_mode);
+    } catch (e: any) {
+      setPeakMessage(e?.message ?? "Failed to load kitchen peak mode");
+    }
+  }
+
   useEffect(() => {
     let alive = true;
 
@@ -214,6 +228,7 @@ export function AdminDashboardClient() {
     loadMenuSlots();
     loadRamadanVisibility();
     loadWalletTopups();
+    loadPeakMode();
     const t = setInterval(refresh, 2000);
     return () => {
       alive = false;
@@ -560,6 +575,26 @@ export function AdminDashboardClient() {
     }
   };
 
+  const savePeakMode = async (nextPeakMode: boolean) => {
+    setPeakBusy(true);
+    setPeakMessage(null);
+    try {
+      const res = await fetch("/api/admin/kitchen/peak-mode", {
+        method: "PUT",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ peak_mode: nextPeakMode }),
+      });
+      const data = await res.json();
+      if (!res.ok) throw new Error(data?.detail ?? data?.error ?? "Failed to save peak mode");
+      setPeakMode(!!data?.peak_mode);
+      setPeakMessage(nextPeakMode ? "Peak mode enabled (manual kitchen controls ON)" : "Peak mode disabled (auto flow only)");
+    } catch (e: any) {
+      setPeakMessage(e?.message ?? "Failed to save peak mode");
+    } finally {
+      setPeakBusy(false);
+    }
+  };
+
   return (
     <div>
       <div className="flex flex-col gap-2 sm:flex-row sm:items-end sm:justify-between">
@@ -677,6 +712,37 @@ export function AdminDashboardClient() {
         {toast && (
           <div className="mt-4 rounded-xl border border-zinc-300 bg-white px-3 py-2 text-sm text-zinc-700 dark:border-zinc-800 dark:bg-zinc-950 dark:text-zinc-200">
             {toast}
+          </div>
+        )}
+      </div>
+
+      <div className="mt-6 rounded-2xl border border-zinc-200 bg-zinc-50 p-4 dark:border-zinc-900 dark:bg-zinc-950">
+        <div className="text-sm font-medium">Kitchen Peak Mode</div>
+        <p className="mt-2 text-sm text-zinc-600 dark:text-zinc-400">
+          Regular hours keep kitchen auto flow. Enable peak mode to allow manual Start/Ready/Complete actions on kitchen board.
+        </p>
+        <div className="mt-4 flex flex-wrap items-center gap-3">
+          <div
+            className={[
+              "rounded-full border px-3 py-1 text-xs",
+              peakMode
+                ? "border-amber-300 bg-amber-50 text-amber-700 dark:border-amber-900 dark:bg-amber-950/40 dark:text-amber-200"
+                : "border-emerald-300 bg-emerald-50 text-emerald-700 dark:border-emerald-900 dark:bg-emerald-950/40 dark:text-emerald-200",
+            ].join(" ")}
+          >
+            {peakMode ? "Peak mode ON" : "Peak mode OFF"}
+          </div>
+          <button
+            onClick={() => savePeakMode(!peakMode)}
+            disabled={peakBusy}
+            className="rounded-xl border border-zinc-300 px-4 py-2 text-sm text-zinc-900 hover:bg-zinc-100 disabled:opacity-60 dark:border-zinc-800 dark:text-zinc-100 dark:hover:bg-zinc-900"
+          >
+            {peakBusy ? "Saving…" : peakMode ? "Disable peak mode" : "Enable peak mode"}
+          </button>
+        </div>
+        {peakMessage && (
+          <div className="mt-3 rounded-xl border border-zinc-300 bg-white px-3 py-2 text-sm text-zinc-700 dark:border-zinc-800 dark:bg-zinc-950 dark:text-zinc-200">
+            {peakMessage}
           </div>
         )}
       </div>

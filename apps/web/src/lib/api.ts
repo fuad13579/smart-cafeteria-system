@@ -80,6 +80,9 @@ interface MenuResponse {
 interface OrderResponse {
   order_id: string;
   token_no?: number;
+  pickup_counter?: number;
+  ready_at?: string | null;
+  ready_until?: string | null;
   status: OrderStatus;
   eta_minutes: number;
 }
@@ -87,6 +90,9 @@ interface OrderResponse {
 export interface OrderDetails {
   order_id: string;
   token_no?: number;
+  pickup_counter?: number;
+  ready_at?: string | null;
+  ready_until?: string | null;
   status: OrderStatus;
   eta_minutes: number;
   student_id?: string;
@@ -157,15 +163,23 @@ function mockOrderFromId(orderId: string): OrderDetails {
   const ageSec = Math.max(0, Math.floor((now - base) / 1000));
 
   if (ageSec < 8) {
-    return { order_id: orderId, token_no: Number(orderId.slice(-4)) || 1001, status: "QUEUED", eta_minutes: 12 };
+    return { order_id: orderId, token_no: Number(orderId.slice(-4)) || 1001, pickup_counter: 1, ready_at: null, ready_until: null, status: "QUEUED", eta_minutes: 12 };
   }
   if (ageSec < 16) {
-    return { order_id: orderId, token_no: Number(orderId.slice(-4)) || 1001, status: "IN_PROGRESS", eta_minutes: 7 };
+    return { order_id: orderId, token_no: Number(orderId.slice(-4)) || 1001, pickup_counter: 1, ready_at: null, ready_until: null, status: "IN_PROGRESS", eta_minutes: 7 };
   }
   if (ageSec < 24) {
-    return { order_id: orderId, token_no: Number(orderId.slice(-4)) || 1001, status: "READY", eta_minutes: 0 };
+    return {
+      order_id: orderId,
+      token_no: Number(orderId.slice(-4)) || 1001,
+      pickup_counter: 1,
+      ready_at: new Date(Date.now() - 60 * 1000).toISOString(),
+      ready_until: new Date(Date.now() + 14 * 60 * 1000).toISOString(),
+      status: "READY",
+      eta_minutes: 0,
+    };
   }
-  return { order_id: orderId, token_no: Number(orderId.slice(-4)) || 1001, status: "COMPLETED", eta_minutes: 0 };
+  return { order_id: orderId, token_no: Number(orderId.slice(-4)) || 1001, pickup_counter: 1, ready_at: null, ready_until: null, status: "COMPLETED", eta_minutes: 0 };
 }
 
 async function makeMockRequest<T>(
@@ -354,6 +368,9 @@ async function makeMockRequest<T>(
     return {
       order_id: String(now),
       token_no: Number(String(now).slice(-4)) || 1001,
+      pickup_counter: 1,
+      ready_at: null,
+      ready_until: null,
       status: "QUEUED",
       eta_minutes: 12,
     } as T;
@@ -371,6 +388,9 @@ async function makeMockRequest<T>(
         {
           order_id: String(now),
           token_no: Number(String(now).slice(-4)) || 1001,
+          pickup_counter: 1,
+          ready_at: null,
+          ready_until: null,
           status: "QUEUED",
           eta_minutes: 12,
           total_amount: 120,
