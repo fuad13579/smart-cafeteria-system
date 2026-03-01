@@ -16,6 +16,40 @@ CREATE TABLE IF NOT EXISTS menu_items (
     created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
 
+CREATE TABLE IF NOT EXISTS menu_slots (
+    id BIGSERIAL PRIMARY KEY,
+    main TEXT NOT NULL CHECK (main IN ('regular', 'ramadan')),
+    slot TEXT NOT NULL CHECK (slot IN ('breakfast', 'lunch', 'dinner', 'iftar', 'suhoor')),
+    is_active BOOLEAN NOT NULL DEFAULT TRUE,
+    created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    UNIQUE (main, slot),
+    CHECK (
+        (main = 'regular' AND slot IN ('breakfast', 'lunch', 'dinner'))
+        OR
+        (main = 'ramadan' AND slot IN ('iftar', 'suhoor'))
+    )
+);
+
+CREATE TABLE IF NOT EXISTS menu_item_slots (
+    slot_id BIGINT NOT NULL REFERENCES menu_slots(id) ON DELETE CASCADE,
+    item_id TEXT NOT NULL REFERENCES menu_items(id) ON DELETE CASCADE,
+    created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    PRIMARY KEY (slot_id, item_id)
+);
+
+CREATE TABLE IF NOT EXISTS menu_visibility_settings (
+    id INTEGER PRIMARY KEY CHECK (id = 1),
+    ramadan_enabled BOOLEAN NOT NULL DEFAULT TRUE,
+    ramadan_start_at TIMESTAMPTZ,
+    ramadan_end_at TIMESTAMPTZ,
+    timezone TEXT NOT NULL DEFAULT 'Asia/Dhaka',
+    updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+
+INSERT INTO menu_visibility_settings (id, ramadan_enabled, timezone)
+VALUES (1, TRUE, 'Asia/Dhaka')
+ON CONFLICT (id) DO NOTHING;
+
 CREATE TABLE IF NOT EXISTS menu_windows (
     id BIGSERIAL PRIMARY KEY,
     name TEXT NOT NULL CHECK (name IN ('iftar', 'saheri')),

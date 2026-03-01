@@ -37,3 +37,19 @@ JOIN menu_items mi ON TRUE
 WHERE mw.name IN ('iftar', 'saheri')
   AND mi.id IN ('1', '2')
 ON CONFLICT DO NOTHING;
+
+INSERT INTO menu_slots (main, slot, is_active)
+VALUES
+    ('regular', 'breakfast', TRUE),
+    ('regular', 'lunch', TRUE),
+    ('regular', 'dinner', TRUE),
+    ('ramadan', 'iftar', TRUE),
+    ('ramadan', 'suhoor', TRUE)
+ON CONFLICT (main, slot) DO NOTHING;
+
+INSERT INTO menu_item_slots (slot_id, item_id)
+SELECT ms.id, mi.id
+FROM menu_slots ms
+JOIN menu_items mi ON TRUE
+WHERE mi.id IN ('1', '2')
+ON CONFLICT DO NOTHING;

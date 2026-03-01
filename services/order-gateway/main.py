@@ -202,6 +202,24 @@ def _menu_cache_key(context: str) -> str:
     return f"menu:{context}:v1"
 
 
+MAIN_SLOT_MAP: dict[str, tuple[str, ...]] = {
+    "regular": ("breakfast", "lunch", "dinner"),
+    "ramadan": ("iftar", "suhoor"),
+}
+
+
+def _default_slot_for_main(main: str) -> str:
+    return "breakfast" if main == "regular" else "iftar"
+
+
+def _is_valid_main_slot(main: str, slot: str) -> bool:
+    return main in MAIN_SLOT_MAP and slot in MAIN_SLOT_MAP[main]
+
+
+def _menu_cache_key_for_slot(main: str, slot: str) -> str:
+    return f"menu:{main}:{slot}:v1"
+
+
 def _should_fail() -> None:
     if not chaos_state["enabled"]:
         return
@@ -271,6 +289,17 @@ class AdminMenuWindowUpdateRequest(BaseModel):
 
 class AdminMenuWindowItemsRequest(BaseModel):
     item_ids: list[str]
+
+
+class AdminMenuSlotItemsRequest(BaseModel):
+    item_ids: list[str]
+
+
+class AdminRamadanVisibilityUpdateRequest(BaseModel):
+    enabled: bool
+    start_at: datetime | None = None
+    end_at: datetime | None = None
+    timezone: str = "Asia/Dhaka"
 
 
 class WalletTopupRequest(BaseModel):
@@ -479,6 +508,192 @@ def _get_context_items(context: str, now_local: datetime) -> list[dict[str, Any]
             rows = cur.fetchall()
     return [
         {"id": row[0], "name": row[1], "price": int(row[2]), "available": bool(row[3])}
+        for row in rows
+    ]
+
+
+def _ensure_menu_slot_schema() -> None:
+    with _db_conn() as conn:
+        with conn.cursor() as cur:
+            cur.execute(
+                """
+                CREATE TABLE IF NOT EXISTS menu_slots (
+                    id BIGSERIAL PRIMARY KEY,
+                    main TEXT NOT NULL CHECK (main IN ('regular', 'ramadan')),
+                    slot TEXT NOT NULL CHECK (slot IN ('breakfast', 'lunch', 'dinner', 'iftar', 'suhoor')),
+                    is_active BOOLEAN NOT NULL DEFAULT TRUE,
+                    created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+                    UNIQUE (main, slot),
+                    CHECK (
+                        (main = 'regular' AND slot IN ('breakfast', 'lunch', 'dinner'))
+                        OR
+                        (main = 'ramadan' AND slot IN ('iftar', 'suhoor'))
+                    )
+                )
+                """
+            )
+            cur.execute(
+                """
+                CREATE TABLE IF NOT EXISTS menu_item_slots (
+                    slot_id BIGINT NOT NULL REFERENCES menu_slots(id) ON DELETE CASCADE,
+                    item_id TEXT NOT NULL REFERENCES menu_items(id) ON DELETE CASCADE,
+                    created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+                    PRIMARY KEY (slot_id, item_id)
+                )
+                """
+            )
+            cur.execute(
+                """
+                INSERT INTO menu_slots(main, slot, is_active)
+                VALUES
+                    ('regular', 'breakfast', TRUE),
+                    ('regular', 'lunch', TRUE),
+                    ('regular', 'dinner', TRUE),
+                    ('ramadan', 'iftar', TRUE),
+                    ('ramadan', 'suhoor', TRUE)
+                ON CONFLICT (main, slot) DO NOTHING
+                """
+            )
+            cur.execute(
+                """
+                INSERT INTO menu_item_slots(slot_id, item_id)
+                SELECT ms.id, mi.id
+                FROM menu_slots ms
+                CROSS JOIN menu_items mi
+                WHERE NOT EXISTS (
+                    SELECT 1 FROM menu_item_slots mis WHERE mis.slot_id = ms.id
+                )
+                ON CONFLICT DO NOTHING
+                """
+            )
+            conn.commit()
+
+
+def _ensure_ramadan_visibility_schema() -> None:
+    with _db_conn() as conn:
+        with conn.cursor() as cur:
+            cur.execute(
+                """
+                CREATE TABLE IF NOT EXISTS menu_visibility_settings (
+                    id INTEGER PRIMARY KEY CHECK (id = 1),
+                    ramadan_enabled BOOLEAN NOT NULL DEFAULT TRUE,
+                    ramadan_start_at TIMESTAMPTZ,
+                    ramadan_end_at TIMESTAMPTZ,
+                    timezone TEXT NOT NULL DEFAULT 'Asia/Dhaka',
+                    updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+                )
+                """
+            )
+            cur.execute(
+                """
+                INSERT INTO menu_visibility_settings(id, ramadan_enabled, timezone)
+                VALUES (1, TRUE, 'Asia/Dhaka')
+                ON CONFLICT (id) DO NOTHING
+                """
+            )
+            conn.commit()
+
+
+def _get_ramadan_visibility(now_local: datetime) -> dict[str, Any]:
+    with _db_conn() as conn:
+        with conn.cursor() as cur:
+            cur.execute(
+                """
+                SELECT ramadan_enabled, ramadan_start_at, ramadan_end_at, timezone
+                FROM menu_visibility_settings
+                WHERE id = 1
+                """
+            )
+            row = cur.fetchone()
+            if not row:
+                return {"visible": True, "enabled": True, "start_at": None, "end_at": None, "timezone": "Asia/Dhaka"}
+            enabled = bool(row[0])
+            start_at = row[1]
+            end_at = row[2]
+            timezone = str(row[3] or "Asia/Dhaka")
+
+    visible = enabled
+    if visible and start_at is not None:
+        visible = now_local.astimezone(start_at.tzinfo) >= start_at
+    if visible and end_at is not None:
+        visible = now_local.astimezone(end_at.tzinfo) <= end_at
+
+    return {
+        "visible": visible,
+        "enabled": enabled,
+        "start_at": start_at.isoformat() if start_at else None,
+        "end_at": end_at.isoformat() if end_at else None,
+        "timezone": timezone,
+    }
+
+
+def _resolve_main_slot_from_legacy_context(context: str, now_local: datetime) -> tuple[str, str]:
+    ctx = (context or "").strip().lower()
+    if ctx in {"", "auto"}:
+        active_context, _ = _resolve_auto_context(now_local)
+        if active_context == "regular":
+            return "regular", "lunch"
+        if active_context == "iftar":
+            return "ramadan", "iftar"
+        return "ramadan", "suhoor"
+    if ctx == "regular":
+        return "regular", "lunch"
+    if ctx == "iftar":
+        return "ramadan", "iftar"
+    if ctx == "saheri":
+        return "ramadan", "suhoor"
+    raise HTTPException(status_code=422, detail="context must be auto|regular|iftar|saheri")
+
+
+def _next_change_at_for_menu_slot(main: str, slot: str, now_local: datetime) -> str | None:
+    if main != "ramadan":
+        return None
+    window_name = "iftar" if slot == "iftar" else "saheri"
+    with _db_conn() as conn:
+        with conn.cursor() as cur:
+            cur.execute(
+                """
+                SELECT start_date, end_date, start_time, end_time
+                FROM menu_windows
+                WHERE is_active = TRUE AND name = %s
+                ORDER BY id ASC
+                """,
+                (window_name,),
+            )
+            rows = cur.fetchall()
+
+    next_change: datetime | None = None
+    for start_d, end_d, start_t, end_t in rows:
+        if _window_active_for_datetime(now_local, start_d, end_d, start_t, end_t):
+            change_at = _next_change_at_for_window(now_local, start_d, end_d, start_t, end_t)
+            if change_at and (next_change is None or change_at < next_change):
+                next_change = change_at
+    return next_change.isoformat() if next_change else None
+
+
+def _get_slot_items(main: str, slot: str) -> list[dict[str, Any]]:
+    with _db_conn() as conn:
+        with conn.cursor() as cur:
+            cur.execute(
+                """
+                SELECT mi.id, mi.name, mi.price, mi.available, mi.stock_quantity
+                FROM menu_items mi
+                JOIN menu_item_slots mis ON mis.item_id = mi.id
+                JOIN menu_slots ms ON ms.id = mis.slot_id
+                WHERE ms.main = %s AND ms.slot = %s AND ms.is_active = TRUE
+                ORDER BY mi.id
+                """,
+                (main, slot),
+            )
+            rows = cur.fetchall()
+    return [
+        {
+            "id": row[0],
+            "name": row[1],
+            "price": int(row[2]),
+            "available": bool(row[3]),
+            "stock_quantity": int(row[4]),
+        }
         for row in rows
     ]
 
@@ -1037,6 +1252,8 @@ def on_startup():
     _init_redis()
     _ensure_outbox_schema()
     _ensure_wallet_schema()
+    _ensure_menu_slot_schema()
+    _ensure_ramadan_visibility_schema()
     threading.Thread(target=_outbox_worker_loop, daemon=True).start()
     threading.Thread(target=_cache_invalidator_loop, daemon=True).start()
 
@@ -1084,6 +1301,151 @@ def admin_get_menu(
             }
             for row in rows
         ]
+    }
+
+
+@app.get("/api/admin/menu/slots")
+def admin_get_menu_slots(
+    authorization: str | None = Header(default=None),
+    access_token: str | None = Cookie(default=None, alias=ACCESS_COOKIE_NAME),
+):
+    _should_fail()
+    _require_admin(authorization, access_token)
+
+    with _db_conn() as conn:
+        with conn.cursor() as cur:
+            cur.execute(
+                """
+                SELECT ms.id, ms.main, ms.slot, ms.is_active,
+                       COALESCE(array_agg(mis.item_id) FILTER (WHERE mis.item_id IS NOT NULL), ARRAY[]::text[]) AS item_ids
+                FROM menu_slots ms
+                LEFT JOIN menu_item_slots mis ON mis.slot_id = ms.id
+                GROUP BY ms.id
+                ORDER BY ms.main, ms.slot
+                """
+            )
+            rows = cur.fetchall()
+    return {
+        "slots": [
+            {
+                "id": int(row[0]),
+                "main": row[1],
+                "slot": row[2],
+                "is_active": bool(row[3]),
+                "item_ids": list(row[4] or []),
+            }
+            for row in rows
+        ]
+    }
+
+
+@app.post("/api/admin/menu/slots/{main}/{slot}/items")
+def admin_assign_menu_slot_items(
+    main: str,
+    slot: str,
+    payload: AdminMenuSlotItemsRequest,
+    authorization: str | None = Header(default=None),
+    access_token: str | None = Cookie(default=None, alias=ACCESS_COOKIE_NAME),
+):
+    _should_fail()
+    _require_admin(authorization, access_token)
+    main_norm = main.strip().lower()
+    slot_norm = slot.strip().lower()
+    if not _is_valid_main_slot(main_norm, slot_norm):
+        raise HTTPException(status_code=422, detail="Invalid main/slot combination")
+
+    clean_ids = [item_id.strip() for item_id in payload.item_ids if item_id.strip()]
+    unique_ids = sorted(set(clean_ids))
+
+    with _db_conn() as conn:
+        with conn.cursor() as cur:
+            cur.execute("SELECT id FROM menu_slots WHERE main = %s AND slot = %s", (main_norm, slot_norm))
+            slot_row = cur.fetchone()
+            if not slot_row:
+                raise HTTPException(status_code=404, detail="Menu slot not found")
+            slot_id = int(slot_row[0])
+
+            if unique_ids:
+                placeholders = ",".join(["%s"] * len(unique_ids))
+                cur.execute(f"SELECT id FROM menu_items WHERE id IN ({placeholders})", tuple(unique_ids))
+                found = {row[0] for row in cur.fetchall()}
+                missing = [x for x in unique_ids if x not in found]
+                if missing:
+                    raise HTTPException(status_code=404, detail=f"Menu item(s) not found: {', '.join(missing)}")
+
+            cur.execute("DELETE FROM menu_item_slots WHERE slot_id = %s", (slot_id,))
+            for item_id in unique_ids:
+                cur.execute(
+                    """
+                    INSERT INTO menu_item_slots(slot_id, item_id)
+                    VALUES (%s, %s)
+                    ON CONFLICT DO NOTHING
+                    """,
+                    (slot_id, item_id),
+                )
+            conn.commit()
+    _publish_cache_invalidation("menu.updated")
+    return {"ok": True, "main": main_norm, "slot": slot_norm, "item_ids": unique_ids}
+
+
+@app.get("/api/admin/menu/visibility")
+def admin_get_menu_visibility(
+    authorization: str | None = Header(default=None),
+    access_token: str | None = Cookie(default=None, alias=ACCESS_COOKIE_NAME),
+):
+    _should_fail()
+    _require_admin(authorization, access_token)
+    now_local = datetime.now(ZoneInfo(_menu_timezone()))
+    data = _get_ramadan_visibility(now_local)
+    return {
+        "ramadan": {
+            "visible_now": data["visible"],
+            "enabled": data["enabled"],
+            "start_at": data["start_at"],
+            "end_at": data["end_at"],
+            "timezone": data["timezone"],
+        }
+    }
+
+
+@app.put("/api/admin/menu/visibility")
+def admin_update_menu_visibility(
+    payload: AdminRamadanVisibilityUpdateRequest,
+    authorization: str | None = Header(default=None),
+    access_token: str | None = Cookie(default=None, alias=ACCESS_COOKIE_NAME),
+):
+    _should_fail()
+    _require_admin(authorization, access_token)
+    if payload.start_at and payload.end_at and payload.start_at >= payload.end_at:
+        raise HTTPException(status_code=422, detail="start_at must be before end_at")
+
+    with _db_conn() as conn:
+        with conn.cursor() as cur:
+            cur.execute(
+                """
+                UPDATE menu_visibility_settings
+                SET ramadan_enabled = %s,
+                    ramadan_start_at = %s,
+                    ramadan_end_at = %s,
+                    timezone = %s,
+                    updated_at = NOW()
+                WHERE id = 1
+                """,
+                (payload.enabled, payload.start_at, payload.end_at, payload.timezone.strip() or "Asia/Dhaka"),
+            )
+            conn.commit()
+    _publish_cache_invalidation("menu.updated")
+    now_local = datetime.now(ZoneInfo(_menu_timezone()))
+    data = _get_ramadan_visibility(now_local)
+    return {
+        "ok": True,
+        "ramadan": {
+            "visible_now": data["visible"],
+            "enabled": data["enabled"],
+            "start_at": data["start_at"],
+            "end_at": data["end_at"],
+            "timezone": data["timezone"],
+        },
     }
 
 
@@ -1848,7 +2210,9 @@ def admin_review_topup(
 
 @app.get("/api/menu")
 def get_menu(
-    context: str = Query(default="auto"),
+    main: str | None = Query(default=None),
+    slot: str | None = Query(default=None),
+    context: str | None = Query(default=None),
     x_debug_time: str | None = Header(default=None, alias="X-Debug-Time"),
     authorization: str | None = Header(default=None),
     access_token: str | None = Cookie(default=None, alias=ACCESS_COOKIE_NAME),
@@ -1858,22 +2222,45 @@ def get_menu(
     if not auth:
         raise HTTPException(status_code=401, detail="Missing or invalid token")
 
-    requested = (context or "auto").strip().lower()
-    if requested not in {"auto", "regular", "iftar", "saheri"}:
-        raise HTTPException(status_code=422, detail="context must be auto|regular|iftar|saheri")
-
     now_local = _parse_debug_time(x_debug_time) or datetime.now(ZoneInfo(_menu_timezone()))
 
-    if requested == "auto":
-        active_context, next_change_at = _resolve_auto_context(now_local)
-    else:
-        active_context = requested
-        next_change_at = None
+    requested_main = (main or "").strip().lower()
+    requested_slot = (slot or "").strip().lower()
 
-    cache_key = _menu_cache_key(active_context)
-    items = _cache_get_json(cache_key)
-    if not isinstance(items, list):
-        items = _get_context_items(active_context, now_local)
+    # Backward-compatible path for old clients using context=auto|regular|iftar|saheri.
+    if not requested_main and not requested_slot:
+        requested_main, requested_slot = _resolve_main_slot_from_legacy_context(context or "auto", now_local)
+
+    if not requested_main:
+        requested_main = "regular"
+    if requested_main not in MAIN_SLOT_MAP:
+        raise HTTPException(status_code=422, detail="main must be regular|ramadan")
+
+    if not requested_slot:
+        requested_slot = _default_slot_for_main(requested_main)
+
+    if not _is_valid_main_slot(requested_main, requested_slot):
+        raise HTTPException(status_code=422, detail="Invalid slot for selected main")
+
+    visibility = _get_ramadan_visibility(now_local)
+    if requested_main == "ramadan" and not visibility["visible"]:
+        requested_main = "regular"
+        requested_slot = _default_slot_for_main("regular")
+
+    next_change_at = _next_change_at_for_menu_slot(requested_main, requested_slot, now_local)
+    cache_key = _menu_cache_key_for_slot(requested_main, requested_slot)
+    payload = _cache_get_json(cache_key)
+    if not isinstance(payload, dict):
+        items = _get_slot_items(requested_main, requested_slot)
+        generated_at = datetime.now(ZoneInfo(_menu_timezone())).isoformat()
+        payload = {
+            "main": requested_main,
+            "slot": requested_slot,
+            "items": items,
+            "generated_at": generated_at,
+            "next_change_at": next_change_at,
+            "ramadan_visible": bool(visibility["visible"]),
+        }
         ttl_seconds = _menu_cache_ttl_seconds()
         if next_change_at:
             try:
@@ -1883,13 +2270,16 @@ def get_menu(
                     ttl_seconds = min(ttl_seconds, seconds_until_change)
             except Exception:
                 pass
-        _cache_set_json(cache_key, items, max(ttl_seconds, 1))
+        _cache_set_json(cache_key, payload, max(ttl_seconds, 1))
+    else:
+        payload["main"] = requested_main
+        payload["slot"] = requested_slot
+        payload["next_change_at"] = next_change_at
+        payload["ramadan_visible"] = bool(visibility["visible"])
+        payload.setdefault("generated_at", datetime.now(ZoneInfo(_menu_timezone())).isoformat())
+        payload.setdefault("items", [])
 
-    return {
-        "active_context": active_context,
-        "next_change_at": next_change_at,
-        "items": items,
-    }
+    return payload
 
 
 @app.post("/api/orders")

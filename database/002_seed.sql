@@ -15,3 +15,18 @@ SET name = EXCLUDED.name,
     price = EXCLUDED.price,
     stock_quantity = EXCLUDED.stock_quantity,
     available = EXCLUDED.available;
+
+INSERT INTO menu_slots (main, slot, is_active)
+VALUES
+    ('regular', 'breakfast', TRUE),
+    ('regular', 'lunch', TRUE),
+    ('regular', 'dinner', TRUE),
+    ('ramadan', 'iftar', TRUE),
+    ('ramadan', 'suhoor', TRUE)
+ON CONFLICT (main, slot) DO NOTHING;
+
+INSERT INTO menu_item_slots (slot_id, item_id)
+SELECT ms.id, mi.id
+FROM menu_slots ms
+CROSS JOIN menu_items mi
+ON CONFLICT DO NOTHING;

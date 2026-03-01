@@ -12,6 +12,8 @@
 - `migrations/009_order_outbox.sql` - transactional outbox table for reliable event publishing
 - `migrations/010_menu_windows.sql` - Ramadan/contextual menu windows and item assignments
 - `migrations/011_wallet_topups.sql` - wallet top-up and transaction ledger tables
+- `migrations/012_menu_slot_hierarchy.sql` - Regular/Ramadan slot hierarchy and slot-item mapping
+- `migrations/013_menu_visibility_settings.sql` - admin-controlled Ramadan tab visibility schedule
 
 ## Apply migrations
 Run from repo root:

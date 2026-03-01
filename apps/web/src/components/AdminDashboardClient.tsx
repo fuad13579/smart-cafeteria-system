@@ -33,6 +33,22 @@ type AdminMenuWindow = {
   item_ids: string[];
 };
 
+type AdminMenuSlot = {
+  id: number;
+  main: "regular" | "ramadan";
+  slot: "breakfast" | "lunch" | "dinner" | "iftar" | "suhoor";
+  is_active: boolean;
+  item_ids: string[];
+};
+
+type AdminRamadanVisibility = {
+  visible_now: boolean;
+  enabled: boolean;
+  start_at: string | null;
+  end_at: string | null;
+  timezone: string;
+};
+
 type AdminWalletTopup = {
   topup_id: string;
   student_id: string;
@@ -95,6 +111,19 @@ export function AdminDashboardClient() {
   const [windowTimezone, setWindowTimezone] = useState("Asia/Dhaka");
   const [windowActive, setWindowActive] = useState(true);
   const [windowItemIdsCsv, setWindowItemIdsCsv] = useState("");
+  const [slotRows, setSlotRows] = useState<AdminMenuSlot[]>([]);
+  const [slotMain, setSlotMain] = useState<"regular" | "ramadan">("regular");
+  const [slotChoice, setSlotChoice] = useState<"breakfast" | "lunch" | "dinner" | "iftar" | "suhoor">("breakfast");
+  const [slotItemIdsCsv, setSlotItemIdsCsv] = useState("");
+  const [slotBusy, setSlotBusy] = useState(false);
+  const [slotMessage, setSlotMessage] = useState<string | null>(null);
+  const [ramadanVisibility, setRamadanVisibility] = useState<AdminRamadanVisibility | null>(null);
+  const [rvEnabled, setRvEnabled] = useState(true);
+  const [rvStart, setRvStart] = useState("");
+  const [rvEnd, setRvEnd] = useState("");
+  const [rvTimezone, setRvTimezone] = useState("Asia/Dhaka");
+  const [rvBusy, setRvBusy] = useState(false);
+  const [rvMessage, setRvMessage] = useState<string | null>(null);
   const [walletTopups, setWalletTopups] = useState<AdminWalletTopup[]>([]);
   const [walletFilter, setWalletFilter] = useState<"pending" | "success" | "failed" | "all">("pending");
   const [walletBusy, setWalletBusy] = useState(false);
@@ -121,6 +150,33 @@ export function AdminDashboardClient() {
       setWindows(data.windows ?? []);
     } catch (e: any) {
       setWindowMessage(e?.message ?? "Failed to load windows");
+    }
+  }
+
+  async function loadMenuSlots() {
+    try {
+      const res = await fetch("/api/admin/menu/slots", { cache: "no-store" });
+      const data = await res.json();
+      if (!res.ok) throw new Error(data?.detail ?? data?.error ?? "Failed to load menu slots");
+      setSlotRows(data.slots ?? []);
+    } catch (e: any) {
+      setSlotMessage(e?.message ?? "Failed to load menu slots");
+    }
+  }
+
+  async function loadRamadanVisibility() {
+    try {
+      const res = await fetch("/api/admin/menu/visibility", { cache: "no-store" });
+      const data = await res.json();
+      if (!res.ok) throw new Error(data?.detail ?? data?.error ?? "Failed to load visibility");
+      const rv = data?.ramadan as AdminRamadanVisibility;
+      setRamadanVisibility(rv);
+      setRvEnabled(!!rv?.enabled);
+      setRvStart(rv?.start_at ? new Date(rv.start_at).toISOString().slice(0, 16) : "");
+      setRvEnd(rv?.end_at ? new Date(rv.end_at).toISOString().slice(0, 16) : "");
+      setRvTimezone(rv?.timezone || "Asia/Dhaka");
+    } catch (e: any) {
+      setRvMessage(e?.message ?? "Failed to load visibility");
     }
   }
 
@@ -155,6 +211,8 @@ export function AdminDashboardClient() {
     refresh();
     loadMenu();
     loadWindows();
+    loadMenuSlots();
+    loadRamadanVisibility();
     loadWalletTopups();
     const t = setInterval(refresh, 2000);
     return () => {
@@ -162,6 +220,15 @@ export function AdminDashboardClient() {
       clearInterval(t);
     };
   }, []);
+
+  useEffect(() => {
+    if (slotMain === "regular" && !["breakfast", "lunch", "dinner"].includes(slotChoice)) {
+      setSlotChoice("breakfast");
+    }
+    if (slotMain === "ramadan" && !["iftar", "suhoor"].includes(slotChoice)) {
+      setSlotChoice("iftar");
+    }
+  }, [slotMain, slotChoice]);
 
   useEffect(() => {
     loadWalletTopups(walletFilter);
@@ -440,6 +507,56 @@ export function AdminDashboardClient() {
       setWalletMessage(e?.message ?? "Review failed");
     } finally {
       setWalletBusy(false);
+    }
+  };
+
+  const assignSlotItems = async () => {
+    setSlotBusy(true);
+    setSlotMessage(null);
+    try {
+      const item_ids = slotItemIdsCsv
+        .split(",")
+        .map((x) => x.trim())
+        .filter(Boolean);
+      const res = await fetch(`/api/admin/menu/slots/${slotMain}/${slotChoice}/items`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ item_ids }),
+      });
+      const data = await res.json();
+      if (!res.ok) throw new Error(data?.detail ?? data?.error ?? "Slot assignment failed");
+      setSlotMessage("Slot items saved and published");
+      await loadMenuSlots();
+    } catch (e: any) {
+      setSlotMessage(e?.message ?? "Slot assignment failed");
+    } finally {
+      setSlotBusy(false);
+    }
+  };
+
+  const saveRamadanVisibility = async () => {
+    setRvBusy(true);
+    setRvMessage(null);
+    try {
+      const payload = {
+        enabled: rvEnabled,
+        start_at: rvStart ? new Date(rvStart).toISOString() : null,
+        end_at: rvEnd ? new Date(rvEnd).toISOString() : null,
+        timezone: rvTimezone || "Asia/Dhaka",
+      };
+      const res = await fetch("/api/admin/menu/visibility", {
+        method: "PUT",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(payload),
+      });
+      const data = await res.json();
+      if (!res.ok) throw new Error(data?.detail ?? data?.error ?? "Failed to save visibility");
+      setRamadanVisibility(data.ramadan);
+      setRvMessage("Ramadan visibility schedule saved");
+    } catch (e: any) {
+      setRvMessage(e?.message ?? "Failed to save visibility");
+    } finally {
+      setRvBusy(false);
     }
   };
 
@@ -818,6 +935,164 @@ export function AdminDashboardClient() {
                       className="rounded-lg border border-zinc-300 px-2 py-1 text-xs hover:bg-zinc-100 dark:border-zinc-800 dark:hover:bg-zinc-900"
                     >
                       Select
+                    </button>
+                  </td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      </div>
+
+      <div className="mt-6 rounded-2xl border border-zinc-200 bg-zinc-50 p-4 dark:border-zinc-900 dark:bg-zinc-950">
+        <div className="text-sm font-medium">Ramadan Tab Visibility</div>
+        <p className="mt-2 text-sm text-zinc-600 dark:text-zinc-400">
+          Control when the Ramadan menu option is visible to users.
+        </p>
+
+        <div className="mt-4 grid grid-cols-1 gap-3 sm:grid-cols-4">
+          <label className="flex items-center gap-2 rounded-xl border border-zinc-300 bg-white px-3 py-2 text-sm text-zinc-900 dark:border-zinc-800 dark:bg-zinc-950 dark:text-zinc-100">
+            <input type="checkbox" checked={rvEnabled} onChange={(e) => setRvEnabled(e.target.checked)} />
+            Enabled
+          </label>
+          <input
+            type="datetime-local"
+            value={rvStart}
+            onChange={(e) => setRvStart(e.target.value)}
+            className="rounded-xl border border-zinc-300 bg-white px-3 py-2 text-sm text-zinc-900 outline-none focus:border-zinc-500 dark:border-zinc-800 dark:bg-zinc-950 dark:text-zinc-100 dark:focus:border-zinc-600"
+          />
+          <input
+            type="datetime-local"
+            value={rvEnd}
+            onChange={(e) => setRvEnd(e.target.value)}
+            className="rounded-xl border border-zinc-300 bg-white px-3 py-2 text-sm text-zinc-900 outline-none focus:border-zinc-500 dark:border-zinc-800 dark:bg-zinc-950 dark:text-zinc-100 dark:focus:border-zinc-600"
+          />
+          <input
+            value={rvTimezone}
+            onChange={(e) => setRvTimezone(e.target.value)}
+            placeholder="Timezone"
+            className="rounded-xl border border-zinc-300 bg-white px-3 py-2 text-sm text-zinc-900 outline-none focus:border-zinc-500 dark:border-zinc-800 dark:bg-zinc-950 dark:text-zinc-100 dark:focus:border-zinc-600"
+          />
+        </div>
+
+        <div className="mt-3 flex items-center gap-2">
+          <button
+            onClick={saveRamadanVisibility}
+            disabled={rvBusy}
+            className="rounded-xl bg-zinc-900 px-4 py-2 text-sm font-medium text-white hover:bg-zinc-800 disabled:opacity-60"
+          >
+            {rvBusy ? "Saving..." : "Save visibility window"}
+          </button>
+          <div className="text-xs text-zinc-600 dark:text-zinc-400">
+            Visible now: {ramadanVisibility?.visible_now ? "Yes" : "No"}
+          </div>
+        </div>
+
+        {rvMessage && (
+          <div className="mt-3 rounded-xl border border-zinc-300 bg-white px-3 py-2 text-sm text-zinc-700 dark:border-zinc-800 dark:bg-zinc-950 dark:text-zinc-200">
+            {rvMessage}
+          </div>
+        )}
+      </div>
+
+      <div className="mt-6 rounded-2xl border border-zinc-200 bg-zinc-50 p-4 dark:border-zinc-900 dark:bg-zinc-950">
+        <div className="text-sm font-medium">Slot Publisher (Regular / Ramadan)</div>
+        <p className="mt-2 text-sm text-zinc-600 dark:text-zinc-400">
+          Assign item IDs per slot and publish. Menu cache invalidates automatically.
+        </p>
+
+        <div className="mt-4 flex flex-wrap gap-2">
+          {(["regular", "ramadan"] as const).map((m) => (
+            <button
+              key={m}
+              onClick={() => setSlotMain(m)}
+              className={[
+                "rounded-xl border px-4 py-2 text-sm",
+                slotMain === m
+                  ? "border-zinc-900 bg-zinc-900 text-white dark:border-zinc-100 dark:bg-zinc-100 dark:text-zinc-900"
+                  : "border-zinc-300 text-zinc-700 hover:bg-zinc-100 dark:border-zinc-800 dark:text-zinc-200 dark:hover:bg-zinc-900",
+              ].join(" ")}
+            >
+              {m}
+            </button>
+          ))}
+        </div>
+
+        <div className="mt-3 flex flex-wrap gap-2">
+          {(slotMain === "regular" ? ["breakfast", "lunch", "dinner"] : ["iftar", "suhoor"]).map((s) => (
+            <button
+              key={s}
+              onClick={() => setSlotChoice(s as any)}
+              className={[
+                "rounded-full border px-3 py-1 text-xs",
+                slotChoice === s
+                  ? "border-zinc-900 bg-zinc-900 text-white dark:border-zinc-100 dark:bg-zinc-100 dark:text-zinc-900"
+                  : "border-zinc-300 text-zinc-700 hover:bg-zinc-100 dark:border-zinc-800 dark:text-zinc-200 dark:hover:bg-zinc-900",
+              ].join(" ")}
+            >
+              {s}
+            </button>
+          ))}
+        </div>
+
+        <div className="mt-3">
+          <input
+            value={slotItemIdsCsv}
+            onChange={(e) => setSlotItemIdsCsv(e.target.value)}
+            placeholder="Comma-separated item IDs"
+            className="w-full rounded-xl border border-zinc-300 bg-white px-3 py-2 text-sm text-zinc-900 outline-none focus:border-zinc-500 dark:border-zinc-800 dark:bg-zinc-950 dark:text-zinc-100 dark:focus:border-zinc-600"
+          />
+        </div>
+
+        <div className="mt-3 flex gap-2">
+          <button
+            onClick={assignSlotItems}
+            disabled={slotBusy}
+            className="rounded-xl bg-zinc-900 px-4 py-2 text-sm font-medium text-white hover:bg-zinc-800 disabled:opacity-60"
+          >
+            {slotBusy ? "Saving..." : "Save & Publish"}
+          </button>
+          <button
+            onClick={loadMenuSlots}
+            disabled={slotBusy}
+            className="rounded-xl border border-zinc-300 px-4 py-2 text-sm text-zinc-900 hover:bg-zinc-100 disabled:opacity-60 dark:border-zinc-800 dark:text-zinc-100 dark:hover:bg-zinc-900"
+          >
+            Refresh slots
+          </button>
+        </div>
+
+        {slotMessage && (
+          <div className="mt-3 rounded-xl border border-zinc-300 bg-white px-3 py-2 text-sm text-zinc-700 dark:border-zinc-800 dark:bg-zinc-950 dark:text-zinc-200">
+            {slotMessage}
+          </div>
+        )}
+
+        <div className="mt-4 overflow-x-auto">
+          <table className="w-full text-sm">
+            <thead>
+              <tr className="text-left text-zinc-600 dark:text-zinc-400">
+                <th className="py-2 pr-3">Main</th>
+                <th className="py-2 pr-3">Slot</th>
+                <th className="py-2 pr-3">Items</th>
+                <th className="py-2 pr-3">Action</th>
+              </tr>
+            </thead>
+            <tbody>
+              {slotRows.map((r) => (
+                <tr key={r.id} className="border-t border-zinc-200 dark:border-zinc-900">
+                  <td className="py-2 pr-3">{r.main}</td>
+                  <td className="py-2 pr-3">{r.slot}</td>
+                  <td className="py-2 pr-3">{r.item_ids.join(", ") || "-"}</td>
+                  <td className="py-2 pr-3">
+                    <button
+                      onClick={() => {
+                        setSlotMain(r.main);
+                        setSlotChoice(r.slot);
+                        setSlotItemIdsCsv(r.item_ids.join(","));
+                      }}
+                      className="rounded-lg border border-zinc-300 px-2 py-1 text-xs hover:bg-zinc-100 dark:border-zinc-800 dark:hover:bg-zinc-900"
+                    >
+                      Load
                     </button>
                   </td>
                 </tr>

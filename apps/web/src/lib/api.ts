@@ -43,6 +43,7 @@ export interface MenuItem {
   name: string;
   price: number;
   available: boolean;
+  stock_quantity?: number;
 }
 
 export type OrderStatus =
@@ -63,12 +64,16 @@ interface LoginResponse {
   };
 }
 
-export type MenuContext = "auto" | "regular" | "iftar" | "saheri";
+export type MenuMain = "regular" | "ramadan";
+export type MenuSlot = "breakfast" | "lunch" | "dinner" | "iftar" | "suhoor";
 export type WalletMethod = "BANK" | "BKASH" | "NAGAD";
 
 interface MenuResponse {
-  active_context?: Exclude<MenuContext, "auto">;
+  main: MenuMain;
+  slot: MenuSlot;
+  generated_at?: string;
   next_change_at?: string | null;
+  ramadan_visible?: boolean;
   items: MenuItem[];
 }
 
@@ -313,24 +318,30 @@ async function makeMockRequest<T>(
   }
 
   if (method === "GET" && endpoint.startsWith("/menu")) {
-    const contextMatch = endpoint.match(/[?&]context=(auto|regular|iftar|saheri)/);
-    const context = (contextMatch?.[1] as MenuContext | undefined) ?? "auto";
-    const activeContext = context === "auto" ? "regular" : context;
+    const mainMatch = endpoint.match(/[?&]main=(regular|ramadan)/);
+    const slotMatch = endpoint.match(/[?&]slot=(breakfast|lunch|dinner|iftar|suhoor)/);
+    const main = (mainMatch?.[1] as MenuMain | undefined) ?? "regular";
+    const slot = (slotMatch?.[1] as MenuSlot | undefined) ?? (main === "regular" ? "breakfast" : "iftar");
     return {
-      active_context: activeContext,
+      main,
+      slot,
+      generated_at: new Date().toISOString(),
       next_change_at: null,
+      ramadan_visible: true,
       items: [
         {
           id: "1",
           name: "Platter 1 (Khichuri + Chicken + Pickle)",
           price: 220,
           available: true,
+          stock_quantity: 12,
         },
         {
           id: "2",
           name: "Platter 2 (Polao + Roast + Salad)",
           price: 280,
           available: true,
+          stock_quantity: 4,
         },
       ],
     } as T;
@@ -413,8 +424,11 @@ export async function logout(): Promise<{ ok: boolean }> {
   return makeRequest<{ ok: boolean }>("POST", "/auth/logout");
 }
 
-export async function getMenu(context: MenuContext = "auto"): Promise<MenuResponse> {
-  return makeRequest<MenuResponse>("GET", `/menu?context=${encodeURIComponent(context)}`);
+export async function getMenu(main: MenuMain = "regular", slot: MenuSlot = "breakfast"): Promise<MenuResponse> {
+  return makeRequest<MenuResponse>(
+    "GET",
+    `/menu?main=${encodeURIComponent(main)}&slot=${encodeURIComponent(slot)}`
+  );
 }
 
 export async function createOrder(
