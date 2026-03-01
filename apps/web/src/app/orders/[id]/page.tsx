@@ -3,7 +3,7 @@
 import { useEffect, useState } from "react";
 import Link from "next/link";
 import { useParams } from "next/navigation";
-import { getMyOrders, getOrder, type OrderStatus } from "@/lib/api";
+import { getMyOrders, getOrder, getOrderSlipUrl, markOrderSlipPrinted, type OrderStatus } from "@/lib/api";
 import { getToken } from "@/lib/storage";
 
 const steps: OrderStatus[] = [
@@ -33,6 +33,7 @@ export default function OrderPage() {
   const [eta, setEta] = useState<number>(12);
   const [loading, setLoading] = useState(true);
   const [err, setErr] = useState<string | null>(null);
+  const [tokenNo, setTokenNo] = useState<number | null>(null);
 
   useEffect(() => {
     let cancelled = false;
@@ -48,6 +49,7 @@ export default function OrderPage() {
         if (cancelled) return;
         setErr(null);
         setStatus(res.status);
+        setTokenNo(typeof res.token_no === "number" ? res.token_no : null);
         setEta(Math.max(0, res.eta_minutes ?? 0));
         if (terminalStates.includes(res.status) && pollRef) {
           clearInterval(pollRef);
@@ -132,10 +134,21 @@ export default function OrderPage() {
       .then((res) => {
         setErr(null);
         setStatus(res.status);
+        setTokenNo(typeof res.token_no === "number" ? res.token_no : null);
         setEta(Math.max(0, res.eta_minutes ?? 0));
       })
       .catch((e: any) => setErr(e?.message ?? "Failed to load order status"))
       .finally(() => setLoading(false));
+  };
+
+  const onPrintSlip = async () => {
+    if (!orderId) return;
+    window.open(getOrderSlipUrl(orderId, true), "_blank", "noopener,noreferrer");
+    try {
+      await markOrderSlipPrinted(orderId);
+    } catch {
+      // non-blocking metadata update
+    }
   };
 
   return (
@@ -146,8 +159,19 @@ export default function OrderPage() {
           <p className="mt-2 text-sm text-zinc-600 dark:text-zinc-400">
             Order ID <span className="text-zinc-900 dark:text-zinc-200">{params.id}</span>
           </p>
+          <p className="mt-1 text-sm text-zinc-600 dark:text-zinc-400">
+            Token <span className="text-zinc-900 dark:text-zinc-200">#{tokenNo ?? "-"}</span>
+          </p>
         </div>
-        <Link href="/menu" className="text-sm text-zinc-700 hover:text-zinc-900 dark:text-zinc-300 dark:hover:text-white">New order</Link>
+        <div className="flex items-center gap-3">
+          <button
+            onClick={onPrintSlip}
+            className="rounded-lg border border-zinc-300 px-3 py-1 text-xs text-zinc-700 hover:bg-zinc-100 dark:border-zinc-700 dark:text-zinc-300 dark:hover:bg-zinc-900"
+          >
+            Print token
+          </button>
+          <Link href="/menu" className="text-sm text-zinc-700 hover:text-zinc-900 dark:text-zinc-300 dark:hover:text-white">New order</Link>
+        </div>
       </div>
 
       <div className="mt-6 rounded-2xl border border-zinc-200 bg-zinc-50 p-5 dark:border-zinc-900 dark:bg-zinc-950">

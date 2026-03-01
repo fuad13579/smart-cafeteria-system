@@ -16,12 +16,17 @@ CREATE TABLE IF NOT EXISTS menu_items (
     created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
 
+CREATE SEQUENCE IF NOT EXISTS order_token_no_seq START WITH 1001 INCREMENT BY 1;
+
 CREATE TABLE IF NOT EXISTS orders (
     id TEXT PRIMARY KEY,
     student_id TEXT REFERENCES students(student_id),
     status TEXT NOT NULL,
     eta_minutes INTEGER NOT NULL DEFAULT 12,
     total_amount INTEGER NOT NULL DEFAULT 0,
+    token_no BIGINT NOT NULL DEFAULT nextval('order_token_no_seq'),
+    printed_at TIMESTAMPTZ,
+    slip_version INTEGER NOT NULL DEFAULT 1,
     created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
 

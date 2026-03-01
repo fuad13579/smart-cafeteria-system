@@ -13,3 +13,6 @@ CREATE INDEX IF NOT EXISTS idx_auth_tokens_student_created_at
 CREATE INDEX IF NOT EXISTS idx_menu_items_available_true
     ON menu_items (id)
     WHERE available = TRUE;
+
+CREATE UNIQUE INDEX IF NOT EXISTS uq_orders_token_no
+    ON orders (token_no);

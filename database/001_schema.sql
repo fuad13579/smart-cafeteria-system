@@ -76,6 +76,9 @@ CREATE TABLE IF NOT EXISTS orders (
     status TEXT NOT NULL,
     eta_minutes INTEGER NOT NULL DEFAULT 12,
     total_amount INTEGER NOT NULL DEFAULT 0,
+    token_no BIGINT NOT NULL UNIQUE,
+    printed_at TIMESTAMPTZ,
+    slip_version INTEGER NOT NULL DEFAULT 1,
     created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
 

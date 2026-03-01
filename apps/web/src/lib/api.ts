@@ -79,12 +79,14 @@ interface MenuResponse {
 
 interface OrderResponse {
   order_id: string;
+  token_no?: number;
   status: OrderStatus;
   eta_minutes: number;
 }
 
 export interface OrderDetails {
   order_id: string;
+  token_no?: number;
   status: OrderStatus;
   eta_minutes: number;
   student_id?: string;
@@ -155,15 +157,15 @@ function mockOrderFromId(orderId: string): OrderDetails {
   const ageSec = Math.max(0, Math.floor((now - base) / 1000));
 
   if (ageSec < 8) {
-    return { order_id: orderId, status: "QUEUED", eta_minutes: 12 };
+    return { order_id: orderId, token_no: Number(orderId.slice(-4)) || 1001, status: "QUEUED", eta_minutes: 12 };
   }
   if (ageSec < 16) {
-    return { order_id: orderId, status: "IN_PROGRESS", eta_minutes: 7 };
+    return { order_id: orderId, token_no: Number(orderId.slice(-4)) || 1001, status: "IN_PROGRESS", eta_minutes: 7 };
   }
   if (ageSec < 24) {
-    return { order_id: orderId, status: "READY", eta_minutes: 0 };
+    return { order_id: orderId, token_no: Number(orderId.slice(-4)) || 1001, status: "READY", eta_minutes: 0 };
   }
-  return { order_id: orderId, status: "COMPLETED", eta_minutes: 0 };
+  return { order_id: orderId, token_no: Number(orderId.slice(-4)) || 1001, status: "COMPLETED", eta_minutes: 0 };
 }
 
 async function makeMockRequest<T>(
@@ -348,8 +350,10 @@ async function makeMockRequest<T>(
   }
 
   if (method === "POST" && endpoint === "/orders") {
+    const now = Date.now();
     return {
-      order_id: String(Date.now()),
+      order_id: String(now),
+      token_no: Number(String(now).slice(-4)) || 1001,
       status: "QUEUED",
       eta_minutes: 12,
     } as T;
@@ -366,6 +370,7 @@ async function makeMockRequest<T>(
       orders: [
         {
           order_id: String(now),
+          token_no: Number(String(now).slice(-4)) || 1001,
           status: "QUEUED",
           eta_minutes: 12,
           total_amount: 120,
@@ -449,6 +454,15 @@ export async function getMyOrders(): Promise<OrdersMeResponse> {
 
 export async function deleteOrder(orderId: string): Promise<{ ok: boolean; order_id: string }> {
   return makeRequest<{ ok: boolean; order_id: string }>("DELETE", `/orders/${orderId}`);
+}
+
+export function getOrderSlipUrl(orderId: string, autoPrint = true): string {
+  const qp = autoPrint ? "?auto_print=1" : "";
+  return resolveUrl(`/orders/${encodeURIComponent(orderId)}/slip${qp}`);
+}
+
+export async function markOrderSlipPrinted(orderId: string): Promise<{ ok: boolean; order_id: string }> {
+  return makeRequest<{ ok: boolean; order_id: string }>("POST", `/orders/${orderId}/slip/printed`);
 }
 
 export async function getWalletBalance(): Promise<WalletBalanceResponse> {

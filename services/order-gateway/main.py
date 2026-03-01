@@ -3,17 +3,22 @@ import os
 import threading
 import time
 import uuid
+from base64 import b64encode
 from datetime import date, datetime, time as dt_time, timedelta
+from html import escape
+from io import BytesIO
 from typing import Any
 from zoneinfo import ZoneInfo
 
 import httpx
 import pika
 import psycopg
+import qrcode
+import qrcode.image.svg
 import redis
 from fastapi import Cookie, FastAPI, Header, HTTPException, Query, Response
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import JSONResponse
+from fastapi.responses import HTMLResponse, JSONResponse
 from pydantic import BaseModel, Field
 
 app = FastAPI()
@@ -78,6 +83,10 @@ def _cookie_secure() -> bool:
 
 def _menu_timezone() -> str:
     return os.getenv("MENU_TIMEZONE", "Asia/Dhaka")
+
+
+def _pickup_counter_label() -> str:
+    return os.getenv("PICKUP_COUNTER_LABEL", "Counter 1")
 
 
 def _db_conn():
@@ -218,6 +227,17 @@ def _is_valid_main_slot(main: str, slot: str) -> bool:
 
 def _menu_cache_key_for_slot(main: str, slot: str) -> str:
     return f"menu:{main}:{slot}:v1"
+
+
+def _qr_svg_data_url(content: str) -> str:
+    qr = qrcode.QRCode(border=1, box_size=6, image_factory=qrcode.image.svg.SvgPathImage)
+    qr.add_data(content)
+    qr.make(fit=True)
+    img = qr.make_image()
+    stream = BytesIO()
+    img.save(stream)
+    payload = b64encode(stream.getvalue()).decode("ascii")
+    return f"data:image/svg+xml;base64,{payload}"
 
 
 def _should_fail() -> None:
@@ -922,6 +942,20 @@ def _ensure_wallet_schema() -> None:
             conn.commit()
 
 
+def _ensure_order_slip_schema() -> None:
+    with _db_conn() as conn:
+        with conn.cursor() as cur:
+            cur.execute("CREATE SEQUENCE IF NOT EXISTS order_token_no_seq START WITH 1001 INCREMENT BY 1")
+            cur.execute("ALTER TABLE orders ADD COLUMN IF NOT EXISTS token_no BIGINT")
+            cur.execute("UPDATE orders SET token_no = nextval('order_token_no_seq') WHERE token_no IS NULL")
+            cur.execute("ALTER TABLE orders ALTER COLUMN token_no SET DEFAULT nextval('order_token_no_seq')")
+            cur.execute("ALTER TABLE orders ALTER COLUMN token_no SET NOT NULL")
+            cur.execute("ALTER TABLE orders ADD COLUMN IF NOT EXISTS printed_at TIMESTAMPTZ")
+            cur.execute("ALTER TABLE orders ADD COLUMN IF NOT EXISTS slip_version INTEGER NOT NULL DEFAULT 1")
+            cur.execute("CREATE UNIQUE INDEX IF NOT EXISTS uq_orders_token_no ON orders(token_no)")
+            conn.commit()
+
+
 def _enqueue_outbox_event(cur: Any, event_type: str, queue_name: str, payload: dict[str, Any]) -> None:
     cur.execute(
         """
@@ -1156,7 +1190,7 @@ def _find_idempotent_order(student_id: str, idempotency_key: str) -> dict[str, A
         with conn.cursor() as cur:
             cur.execute(
                 """
-                SELECT o.id, o.status, o.eta_minutes, o.total_amount, o.created_at
+                SELECT o.id, o.token_no, o.status, o.eta_minutes, o.total_amount, o.created_at
                 FROM order_idempotency oi
                 JOIN orders o ON o.id = oi.order_id
                 WHERE oi.student_id = %s AND oi.idempotency_key = %s
@@ -1168,10 +1202,11 @@ def _find_idempotent_order(student_id: str, idempotency_key: str) -> dict[str, A
                 return None
             return {
                 "order_id": row[0],
-                "status": row[1],
-                "eta_minutes": row[2],
-                "total_amount": row[3],
-                "created_at": row[4].isoformat() if row[4] else None,
+                "token_no": int(row[1]),
+                "status": row[2],
+                "eta_minutes": row[3],
+                "total_amount": row[4],
+                "created_at": row[5].isoformat() if row[5] else None,
                 "idempotent_replay": True,
             }
 
@@ -1188,6 +1223,56 @@ def _store_idempotency(student_id: str, idempotency_key: str, order_id: str) -> 
                 (student_id, idempotency_key, order_id),
             )
             conn.commit()
+
+
+def _load_order_with_items(order_id: str) -> dict[str, Any] | None:
+    with _db_conn() as conn:
+        with conn.cursor() as cur:
+            cur.execute(
+                """
+                SELECT id, student_id, token_no, status, eta_minutes, total_amount, created_at, printed_at, slip_version
+                FROM orders
+                WHERE id = %s
+                """,
+                (order_id,),
+            )
+            row = cur.fetchone()
+            if not row:
+                return None
+
+            cur.execute(
+                """
+                SELECT oi.item_id, mi.name, oi.qty, oi.unit_price
+                FROM order_items oi
+                JOIN menu_items mi ON mi.id = oi.item_id
+                WHERE oi.order_id = %s
+                ORDER BY oi.id ASC
+                """,
+                (order_id,),
+            )
+            item_rows = cur.fetchall()
+
+    return {
+        "order_id": row[0],
+        "student_id": row[1],
+        "token_no": int(row[2]),
+        "status": row[3],
+        "eta_minutes": int(row[4]),
+        "total_amount": int(row[5]),
+        "created_at": row[6],
+        "printed_at": row[7],
+        "slip_version": int(row[8]),
+        "items": [
+            {
+                "item_id": item[0],
+                "name": item[1],
+                "qty": int(item[2]),
+                "unit_price": int(item[3]),
+                "line_total": int(item[2]) * int(item[3]),
+            }
+            for item in item_rows
+        ],
+    }
 
 
 @app.get("/health")
@@ -1252,6 +1337,7 @@ def on_startup():
     _init_redis()
     _ensure_outbox_schema()
     _ensure_wallet_schema()
+    _ensure_order_slip_schema()
     _ensure_menu_slot_schema()
     _ensure_ramadan_visibility_schema()
     threading.Thread(target=_outbox_worker_loop, daemon=True).start()
@@ -2355,9 +2441,12 @@ def create_order(
                     """
                     INSERT INTO orders(id, student_id, status, eta_minutes, total_amount)
                     VALUES (%s, %s, %s, %s, %s)
+                    RETURNING token_no
                     """,
                     (order_id, student_id, status_value, eta_minutes, total),
                 )
+                token_row = cur.fetchone()
+                token_no = int(token_row[0]) if token_row else None
 
                 for line in payload.items:
                     unit_price = menu_map[line.id]["price"]
@@ -2416,6 +2505,7 @@ def create_order(
 
     return {
         "order_id": order_id,
+        "token_no": token_no,
         "status": status_value,
         "eta_minutes": eta_minutes,
         "payment_status": "COMPLETED",
@@ -2439,7 +2529,10 @@ def get_order(
 
     with _db_conn() as conn:
         with conn.cursor() as cur:
-            cur.execute("SELECT id, student_id, status, eta_minutes, total_amount, created_at FROM orders WHERE id = %s", (order_id,))
+            cur.execute(
+                "SELECT id, student_id, token_no, status, eta_minutes, total_amount, created_at FROM orders WHERE id = %s",
+                (order_id,),
+            )
             row = cur.fetchone()
             if not row:
                 raise HTTPException(status_code=404, detail="Order not found")
@@ -2449,11 +2542,126 @@ def get_order(
             return {
                 "order_id": row[0],
                 "student_id": row[1],
-                "status": row[2],
-                "eta_minutes": row[3],
-                "total_amount": row[4],
-                "created_at": row[5].isoformat() if row[5] else None,
+                "token_no": int(row[2]),
+                "status": row[3],
+                "eta_minutes": row[4],
+                "total_amount": row[5],
+                "created_at": row[6].isoformat() if row[6] else None,
             }
+
+
+@app.get("/api/orders/{order_id}/slip", response_class=HTMLResponse)
+def get_order_slip(
+    order_id: str,
+    auto_print: bool = Query(default=True),
+    authorization: str | None = Header(default=None),
+    access_token: str | None = Cookie(default=None, alias=ACCESS_COOKIE_NAME),
+):
+    _should_fail()
+    auth = _extract_auth(authorization, access_token)
+    if not auth:
+        raise HTTPException(status_code=401, detail="Missing or invalid token")
+
+    order = _load_order_with_items(order_id)
+    if not order:
+        raise HTTPException(status_code=404, detail="Order not found")
+
+    is_admin = auth.get("role") == "admin"
+    if order["student_id"] != auth["student_id"] and not is_admin:
+        raise HTTPException(status_code=403, detail="Forbidden")
+
+    created = order["created_at"]
+    created_text = created.strftime("%Y-%m-%d %H:%M:%S") if created else "-"
+    item_rows = "".join(
+        (
+            "<tr>"
+            f"<td>{escape(item['name'])}</td>"
+            f"<td style='text-align:center'>{item['qty']}</td>"
+            f"<td style='text-align:right'>BDT {item['line_total']}</td>"
+            "</tr>"
+        )
+        for item in order["items"]
+    )
+    short_id = str(order["order_id"])[:8]
+    qr_payload = json.dumps({"order_id": order["order_id"], "token_no": order["token_no"]})
+    qr_data_url = _qr_svg_data_url(qr_payload)
+    auto_print_script = "window.addEventListener('load', () => window.print());" if auto_print else ""
+
+    html = f"""<!doctype html>
+<html>
+<head>
+  <meta charset="utf-8" />
+  <title>Order Token #{order['token_no']}</title>
+  <style>
+    @page {{ size: A6; margin: 8mm; }}
+    body {{ font-family: Arial, sans-serif; color: #111; margin: 0; }}
+    .slip {{ width: 100%; max-width: 360px; margin: 0 auto; }}
+    .token {{ font-size: 44px; font-weight: 700; text-align: center; margin: 4px 0; letter-spacing: 1px; }}
+    .meta {{ font-size: 12px; margin-top: 2px; }}
+    .meta-row {{ display: flex; justify-content: space-between; margin: 2px 0; gap: 8px; }}
+    table {{ width: 100%; border-collapse: collapse; margin-top: 8px; font-size: 12px; }}
+    th, td {{ border-bottom: 1px dashed #bbb; padding: 5px 0; }}
+    th {{ text-align: left; font-size: 11px; color: #333; }}
+    .total {{ margin-top: 8px; display: flex; justify-content: space-between; font-weight: 700; font-size: 14px; }}
+    .status {{ margin-top: 8px; font-size: 12px; }}
+    .qr {{ margin-top: 8px; text-align: center; }}
+    .qr img {{ width: 120px; height: 120px; }}
+    .foot {{ margin-top: 4px; text-align: center; font-size: 11px; color: #444; }}
+  </style>
+</head>
+<body>
+  <div class="slip">
+    <div class="token">#{order['token_no']}</div>
+    <div class="meta">
+      <div class="meta-row"><span>Order</span><strong>{escape(short_id)}</strong></div>
+      <div class="meta-row"><span>Placed</span><span>{escape(created_text)}</span></div>
+      <div class="meta-row"><span>Student</span><span>{escape(order['student_id'])}</span></div>
+    </div>
+    <table>
+      <thead>
+        <tr><th>Item</th><th style="text-align:center">Qty</th><th style="text-align:right">Amount</th></tr>
+      </thead>
+      <tbody>{item_rows}</tbody>
+    </table>
+    <div class="total"><span>Total</span><span>BDT {order['total_amount']}</span></div>
+    <div class="status">
+      <div>Status: <strong>{escape(order['status'])}</strong></div>
+      <div>Pickup: <strong>{escape(_pickup_counter_label())}</strong></div>
+    </div>
+    <div class="qr"><img alt="Order QR" src="{qr_data_url}" /></div>
+    <div class="foot">{escape(order['order_id'])}</div>
+  </div>
+  <script>{auto_print_script}</script>
+</body>
+</html>"""
+    return HTMLResponse(content=html)
+
+
+@app.post("/api/orders/{order_id}/slip/printed")
+def mark_order_slip_printed(
+    order_id: str,
+    authorization: str | None = Header(default=None),
+    access_token: str | None = Cookie(default=None, alias=ACCESS_COOKIE_NAME),
+):
+    _should_fail()
+    auth = _extract_auth(authorization, access_token)
+    if not auth:
+        raise HTTPException(status_code=401, detail="Missing or invalid token")
+
+    is_admin = auth.get("role") == "admin"
+    with _db_conn() as conn:
+        with conn.cursor() as cur:
+            cur.execute("SELECT student_id FROM orders WHERE id = %s", (order_id,))
+            row = cur.fetchone()
+            if not row:
+                raise HTTPException(status_code=404, detail="Order not found")
+            if row[0] != auth["student_id"] and not is_admin:
+                raise HTTPException(status_code=403, detail="Forbidden")
+
+            cur.execute("UPDATE orders SET printed_at = NOW() WHERE id = %s", (order_id,))
+            conn.commit()
+
+    return {"ok": True, "order_id": order_id}
 
 
 @app.delete("/api/orders/{order_id}")
@@ -2501,7 +2709,7 @@ def get_my_orders(
         with conn.cursor() as cur:
             cur.execute(
                 """
-                SELECT id, status, eta_minutes, total_amount, created_at
+                SELECT id, token_no, status, eta_minutes, total_amount, created_at
                 FROM orders
                 WHERE student_id = %s
                 ORDER BY created_at DESC
@@ -2514,10 +2722,11 @@ def get_my_orders(
         "orders": [
             {
                 "order_id": row[0],
-                "status": row[1],
-                "eta_minutes": row[2],
-                "total_amount": row[3],
-                "created_at": row[4].isoformat() if row[4] else None,
+                "token_no": int(row[1]),
+                "status": row[2],
+                "eta_minutes": row[3],
+                "total_amount": row[4],
+                "created_at": row[5].isoformat() if row[5] else None,
             }
             for row in rows
         ]

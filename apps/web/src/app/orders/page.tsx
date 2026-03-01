@@ -2,7 +2,7 @@
 
 import Link from "next/link";
 import { useEffect, useState } from "react";
-import { deleteOrder, getMyOrders, type OrderDetails } from "@/lib/api";
+import { deleteOrder, getMyOrders, getOrderSlipUrl, markOrderSlipPrinted, type OrderDetails } from "@/lib/api";
 import { useToast } from "@/components/ToastProvider";
 
 export default function OrdersPage() {
@@ -74,6 +74,15 @@ export default function OrdersPage() {
     }
   };
 
+  const onPrintSlip = async (orderId: string) => {
+    window.open(getOrderSlipUrl(orderId, true), "_blank", "noopener,noreferrer");
+    try {
+      await markOrderSlipPrinted(orderId);
+    } catch {
+      // non-blocking metadata update
+    }
+  };
+
   return (
     <div>
       <h1 className="text-2xl font-semibold text-zinc-900 dark:text-white">My Orders</h1>
@@ -128,10 +137,16 @@ export default function OrdersPage() {
               </div>
               <div className="flex items-center gap-2">
                 <div className="rounded-full bg-zinc-200 px-3 py-1 text-xs dark:bg-zinc-800">{o.status}</div>
+                <button
+                  onClick={() => onPrintSlip(o.order_id)}
+                  className="rounded-lg border border-zinc-300 px-2 py-1 text-xs text-zinc-700 hover:bg-zinc-100 dark:border-zinc-700 dark:text-zinc-300 dark:hover:bg-zinc-900"
+                >
+                  Print token
+                </button>
               </div>
             </div>
             <div className="mt-2 text-xs text-zinc-600 dark:text-zinc-400">
-              ETA: {o.eta_minutes} min · Total: BDT {o.total_amount ?? 0}
+              Token: #{o.token_no ?? "-"} · ETA: {o.eta_minutes} min · Total: BDT {o.total_amount ?? 0}
             </div>
           </div>
         ))}
