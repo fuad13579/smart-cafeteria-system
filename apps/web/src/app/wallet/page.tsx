@@ -6,7 +6,6 @@ import {
   getWalletBalance,
   getWalletTransactions,
   me,
-  postWalletWebhook,
   type WalletMethod,
   type WalletTransaction,
 } from "@/lib/api";
@@ -40,7 +39,15 @@ export default function WalletPage() {
   const [showAddMoney, setShowAddMoney] = useState(false);
   const [step, setStep] = useState<1 | 2 | 3>(1);
   const [status, setStatus] = useState<"idle" | "processing" | "success" | "failed">("idle");
-  const [pendingTopup, setPendingTopup] = useState<{ topup_id: string; reference_id?: string } | null>(null);
+  const [pendingTopup, setPendingTopup] = useState<{ topup_id: string; reference_id?: string; status?: "PENDING" | "COMPLETED" | "FAILED" } | null>(null);
+  const [mobileNumber, setMobileNumber] = useState("");
+  const [bankName, setBankName] = useState("Dutch-Bangla Bank");
+  const [bankNameOther, setBankNameOther] = useState("");
+  const [bankAccountNo, setBankAccountNo] = useState("");
+  const [accountHolderName, setAccountHolderName] = useState("");
+  const [notes, setNotes] = useState("");
+  const [referenceId, setReferenceId] = useState("");
+  const [slipFileName, setSlipFileName] = useState("");
 
   const fee = 0;
   const parsedAmount = useMemo(() => Number(amount), [amount]);
@@ -85,6 +92,37 @@ export default function WalletPage() {
     return null;
   };
 
+  const makeReference = () => `TOPUP-${Math.random().toString(36).slice(2, 6).toUpperCase()}`;
+
+  const validateDetails = (): string | null => {
+    if (method === "BKASH" || method === "NAGAD") {
+      if (!/^01\d{9}$/.test(mobileNumber.trim())) return "Mobile number must be 11 digits (01XXXXXXXXX)";
+      return null;
+    }
+    const selectedBank = bankName === "Other" ? bankNameOther.trim() : bankName.trim();
+    if (!selectedBank) return "Bank name is required";
+    if (!/^\d{8,16}$/.test(bankAccountNo.trim())) return "Bank account must be 8-16 digits";
+    return null;
+  };
+
+  const buildTopupDetails = () => {
+    if (method === "BKASH" || method === "NAGAD") {
+      return {
+        mobile: mobileNumber.trim(),
+        reference_id: referenceId,
+        notes: notes.trim() || undefined,
+      };
+    }
+    return {
+      bank_name: bankName === "Other" ? bankNameOther.trim() : bankName.trim(),
+      account_number: bankAccountNo.trim(),
+      account_holder_name: accountHolderName.trim() || undefined,
+      reference_id: referenceId,
+      slip_name: slipFileName || undefined,
+      notes: notes.trim() || undefined,
+    };
+  };
+
   const onContinue = (e: React.FormEvent) => {
     e.preventDefault();
     const msg = validateAmount();
@@ -100,28 +138,29 @@ export default function WalletPage() {
   const onConfirmPay = async () => {
     const n = Number(amount);
     if (!Number.isFinite(n)) return;
+    const detailError = validateDetails();
+    if (detailError) {
+      setErr(detailError);
+      showToast(detailError, "error");
+      return;
+    }
     try {
       setBusy(true);
       setErr(null);
       setStep(3);
       setStatus("processing");
-      const intent = await createWalletTopup(Math.floor(n), method);
-      setPendingTopup({ topup_id: intent.topup.topup_id, reference_id: intent.topup.reference_id });
+      const intent = await createWalletTopup(Math.floor(n), method, buildTopupDetails(), "demo");
+      setPendingTopup({ topup_id: intent.topup.topup_id, reference_id: intent.topup.reference_id, status: intent.topup.status });
 
-      // Simulate provider callback in demo mode while preserving webhook handshake contract.
-      await new Promise((resolve) => setTimeout(resolve, 1200));
-      const provider = method.toLowerCase() as "bkash" | "nagad" | "bank";
-      const hook = await postWalletWebhook(provider, {
-        topup_id: intent.topup.topup_id,
-        status: "SUCCESS",
-        provider_txn_id: `${provider.toUpperCase()}-${Date.now()}`,
-      });
+      if (method !== "BANK") {
+        await new Promise((resolve) => setTimeout(resolve, 3000));
+      }
 
-      if (hook.status === "SUCCESS") {
-        if (typeof hook.account_balance === "number") setBalance(hook.account_balance);
+      if (intent.topup.status === "COMPLETED") {
+        if (typeof intent.account_balance === "number") setBalance(intent.account_balance);
         const user = getUser();
-        if (user && typeof hook.account_balance === "number") {
-          setUser({ ...user, account_balance: hook.account_balance });
+        if (user && typeof intent.account_balance === "number") {
+          setUser({ ...user, account_balance: intent.account_balance });
         }
         try {
           const current = await me();
@@ -131,7 +170,11 @@ export default function WalletPage() {
         }
         await refreshAll(filter);
         setStatus("success");
-        showToast("Balance updated", "success");
+        showToast(intent.message ?? "Demo top-up successful", "success");
+      } else if (intent.topup.status === "PENDING") {
+        await refreshAll(filter);
+        setStatus("success");
+        showToast(intent.message ?? "Submitted for verification", "success");
       } else {
         setStatus("failed");
         showToast("Payment failed", "error");
@@ -151,6 +194,14 @@ export default function WalletPage() {
     setStatus("idle");
     setErr(null);
     setPendingTopup(null);
+    setMobileNumber("");
+    setBankName("Dutch-Bangla Bank");
+    setBankNameOther("");
+    setBankAccountNo("");
+    setAccountHolderName("");
+    setNotes("");
+    setReferenceId("");
+    setSlipFileName("");
   };
 
   const copyTxnId = async (id: string) => {
@@ -190,6 +241,7 @@ export default function WalletPage() {
             setStep(1);
             setStatus("idle");
             setErr(null);
+            setReferenceId(makeReference());
           }}
           className="rounded-xl bg-zinc-900 px-4 py-2 text-sm font-medium text-white hover:bg-zinc-800 dark:hover:bg-zinc-800"
         >
@@ -261,7 +313,10 @@ export default function WalletPage() {
                   ].map((m) => (
                     <button
                       key={m.value}
-                      onClick={() => setMethod(m.value)}
+                      onClick={() => {
+                        setMethod(m.value);
+                        setErr(null);
+                      }}
                       className={[
                         "rounded-xl border p-3 text-left",
                         method === m.value
@@ -276,6 +331,123 @@ export default function WalletPage() {
                       <div className="mt-1 text-xs text-zinc-600 dark:text-zinc-400">{m.subtitle}</div>
                     </button>
                   ))}
+                </div>
+
+                <div className="mt-4 rounded-xl border border-zinc-200 bg-zinc-50 px-3 py-3 text-sm dark:border-zinc-800 dark:bg-zinc-900/40">
+                  <div className="mb-2 font-medium text-zinc-800 dark:text-zinc-200">Payment details</div>
+
+                  {(method === "BKASH" || method === "NAGAD") && (
+                    <div className="space-y-3">
+                      <label className="block text-xs text-zinc-600 dark:text-zinc-400">
+                        {method === "BKASH" ? "bKash mobile number" : "Nagad mobile number"}
+                        <input
+                          value={mobileNumber}
+                          onChange={(e) => setMobileNumber(e.target.value.replace(/[^\d]/g, "").slice(0, 11))}
+                          placeholder="01XXXXXXXXX"
+                          inputMode="numeric"
+                          className="mt-1 w-full rounded-lg border border-zinc-300 bg-white px-3 py-2 text-sm text-zinc-900 outline-none focus:border-zinc-500 dark:border-zinc-700 dark:bg-zinc-950 dark:text-zinc-100 dark:focus:border-zinc-600"
+                        />
+                      </label>
+                      <label className="block text-xs text-zinc-600 dark:text-zinc-400">
+                        Transaction reference
+                        <div className="mt-1 flex gap-2">
+                          <input
+                            value={referenceId}
+                            onChange={(e) => setReferenceId(e.target.value.toUpperCase())}
+                            className="w-full rounded-lg border border-zinc-300 bg-white px-3 py-2 text-sm font-mono text-zinc-900 outline-none focus:border-zinc-500 dark:border-zinc-700 dark:bg-zinc-950 dark:text-zinc-100 dark:focus:border-zinc-600"
+                          />
+                          <button
+                            type="button"
+                            onClick={() => setReferenceId(makeReference())}
+                            className="rounded-lg border border-zinc-300 px-3 py-2 text-xs text-zinc-700 hover:bg-zinc-100 dark:border-zinc-700 dark:text-zinc-200 dark:hover:bg-zinc-900"
+                          >
+                            Auto
+                          </button>
+                        </div>
+                      </label>
+                      <label className="block text-xs text-zinc-600 dark:text-zinc-400">
+                        Notes
+                        <input
+                          value={notes}
+                          onChange={(e) => setNotes(e.target.value)}
+                          placeholder="Optional"
+                          className="mt-1 w-full rounded-lg border border-zinc-300 bg-white px-3 py-2 text-sm text-zinc-900 outline-none focus:border-zinc-500 dark:border-zinc-700 dark:bg-zinc-950 dark:text-zinc-100 dark:focus:border-zinc-600"
+                        />
+                      </label>
+                    </div>
+                  )}
+
+                  {method === "BANK" && (
+                    <div className="space-y-3">
+                      <label className="block text-xs text-zinc-600 dark:text-zinc-400">
+                        Bank name
+                        <select
+                          value={bankName}
+                          onChange={(e) => setBankName(e.target.value)}
+                          className="mt-1 w-full rounded-lg border border-zinc-300 bg-white px-3 py-2 text-sm text-zinc-900 outline-none focus:border-zinc-500 dark:border-zinc-700 dark:bg-zinc-950 dark:text-zinc-100 dark:focus:border-zinc-600"
+                        >
+                          <option>Dutch-Bangla Bank</option>
+                          <option>BRAC Bank</option>
+                          <option>Islami Bank</option>
+                          <option>City Bank</option>
+                          <option>Other</option>
+                        </select>
+                      </label>
+                      {bankName === "Other" && (
+                        <label className="block text-xs text-zinc-600 dark:text-zinc-400">
+                          Other bank name
+                          <input
+                            value={bankNameOther}
+                            onChange={(e) => setBankNameOther(e.target.value)}
+                            className="mt-1 w-full rounded-lg border border-zinc-300 bg-white px-3 py-2 text-sm text-zinc-900 outline-none focus:border-zinc-500 dark:border-zinc-700 dark:bg-zinc-950 dark:text-zinc-100 dark:focus:border-zinc-600"
+                          />
+                        </label>
+                      )}
+                      <label className="block text-xs text-zinc-600 dark:text-zinc-400">
+                        Account number
+                        <input
+                          value={bankAccountNo}
+                          onChange={(e) => setBankAccountNo(e.target.value.replace(/[^\d]/g, "").slice(0, 16))}
+                          inputMode="numeric"
+                          className="mt-1 w-full rounded-lg border border-zinc-300 bg-white px-3 py-2 text-sm text-zinc-900 outline-none focus:border-zinc-500 dark:border-zinc-700 dark:bg-zinc-950 dark:text-zinc-100 dark:focus:border-zinc-600"
+                        />
+                      </label>
+                      <label className="block text-xs text-zinc-600 dark:text-zinc-400">
+                        Account holder name
+                        <input
+                          value={accountHolderName}
+                          onChange={(e) => setAccountHolderName(e.target.value)}
+                          placeholder="Optional"
+                          className="mt-1 w-full rounded-lg border border-zinc-300 bg-white px-3 py-2 text-sm text-zinc-900 outline-none focus:border-zinc-500 dark:border-zinc-700 dark:bg-zinc-950 dark:text-zinc-100 dark:focus:border-zinc-600"
+                        />
+                      </label>
+                      <label className="block text-xs text-zinc-600 dark:text-zinc-400">
+                        Reference ID
+                        <div className="mt-1 flex gap-2">
+                          <input
+                            value={referenceId}
+                            onChange={(e) => setReferenceId(e.target.value.toUpperCase())}
+                            className="w-full rounded-lg border border-zinc-300 bg-white px-3 py-2 text-sm font-mono text-zinc-900 outline-none focus:border-zinc-500 dark:border-zinc-700 dark:bg-zinc-950 dark:text-zinc-100 dark:focus:border-zinc-600"
+                          />
+                          <button
+                            type="button"
+                            onClick={() => setReferenceId(makeReference())}
+                            className="rounded-lg border border-zinc-300 px-3 py-2 text-xs text-zinc-700 hover:bg-zinc-100 dark:border-zinc-700 dark:text-zinc-200 dark:hover:bg-zinc-900"
+                          >
+                            Auto
+                          </button>
+                        </div>
+                      </label>
+                      <label className="block text-xs text-zinc-600 dark:text-zinc-400">
+                        Upload slip (demo optional)
+                        <input
+                          type="file"
+                          onChange={(e) => setSlipFileName(e.target.files?.[0]?.name ?? "")}
+                          className="mt-1 w-full rounded-lg border border-zinc-300 bg-white px-3 py-2 text-xs text-zinc-700 outline-none file:mr-2 file:rounded-md file:border file:border-zinc-300 file:bg-zinc-100 file:px-2 file:py-1 file:text-xs file:text-zinc-700 dark:border-zinc-700 dark:bg-zinc-950 dark:text-zinc-300 dark:file:border-zinc-700 dark:file:bg-zinc-900 dark:file:text-zinc-300"
+                        />
+                      </label>
+                    </div>
+                  )}
                 </div>
 
                 <div className="mt-4 rounded-xl border border-zinc-200 bg-zinc-50 px-3 py-2 text-sm dark:border-zinc-800 dark:bg-zinc-900/40">
@@ -302,10 +474,10 @@ export default function WalletPage() {
                   </button>
                   <button
                     onClick={onConfirmPay}
-                    disabled={busy}
+                    disabled={busy || Boolean(validateDetails())}
                     className="rounded-xl bg-zinc-900 px-4 py-2 text-sm font-medium text-white hover:bg-zinc-800 disabled:opacity-60 dark:hover:bg-zinc-800"
                   >
-                    {busy ? "Processing..." : method === "BANK" ? "Proceed" : "Confirm & Pay"}
+                    {busy ? "Processing..." : method === "BANK" ? "Submit for Verification (Demo)" : "Confirm & Submit (Demo)"}
                   </button>
                 </div>
               </div>
@@ -320,7 +492,9 @@ export default function WalletPage() {
                 )}
                 {status === "success" && (
                   <div className="rounded-xl border border-emerald-300 bg-emerald-50 px-3 py-3 text-sm text-emerald-800 dark:border-emerald-900 dark:bg-emerald-950/40 dark:text-emerald-200">
-                    Balance updated.
+                    {pendingTopup?.status === "PENDING"
+                      ? "Top-up submitted and pending admin verification. Balance will update after approval."
+                      : "Demo top-up successful. Balance updated."}
                   </div>
                 )}
                 {status === "failed" && (

@@ -127,6 +127,8 @@ export interface WalletTransactionsResponse {
 export interface WalletTopupResponse {
   ok: boolean;
   replayed: boolean;
+  message?: string;
+  account_balance?: number;
   topup: {
     topup_id: string;
     amount: number;
@@ -267,28 +269,37 @@ async function makeMockRequest<T>(
     const amount = Number(body?.amount ?? 0);
     const rawMethod = String(body?.method ?? "BKASH").toUpperCase();
     const method = (rawMethod === "BANK" || rawMethod === "BKASH" || rawMethod === "NAGAD" ? rawMethod : "BKASH") as WalletMethod;
+    const mode = String(body?.mode ?? "normal").toLowerCase();
+    const details = body?.details ?? {};
     const topupId = `topup-${Date.now()}`;
-    const reference = `REF-${Math.random().toString(36).slice(2, 10).toUpperCase()}`;
+    const reference = String(details?.reference_id || `TOPUP-${Math.random().toString(36).slice(2, 6).toUpperCase()}`);
+    const completedNow = mode === "demo" && method !== "BANK";
+    const status = completedNow ? "COMPLETED" : "PENDING";
     mockWalletTopups = [
       {
         topup_id: topupId,
         amount: Math.max(amount, 0),
         method,
-        status: "PENDING",
+        status,
         reference_id: reference,
         created_at: new Date().toISOString(),
-        completed_at: null,
+        completed_at: completedNow ? new Date().toISOString() : null,
       },
       ...mockWalletTopups,
     ];
+    if (completedNow) {
+      mockAccountBalance += Math.max(amount, 0);
+    }
     return {
       ok: true,
       replayed: false,
+      message: completedNow ? "Demo top-up successful" : "Top-up submitted for verification",
+      account_balance: completedNow ? mockAccountBalance : undefined,
       topup: {
         topup_id: topupId,
         amount: Math.max(amount, 0),
         method,
-        status: "PENDING",
+        status,
         reference_id: reference,
         redirect_url: method === "BANK" ? null : `https://pay.local/${method.toLowerCase()}/${topupId}`,
       },
@@ -499,8 +510,13 @@ export async function getWalletTransactions(
   );
 }
 
-export async function createWalletTopup(amount: number, method: WalletMethod): Promise<WalletTopupResponse> {
-  return makeRequest<WalletTopupResponse>("POST", "/wallet/topups", { amount, method });
+export async function createWalletTopup(
+  amount: number,
+  method: WalletMethod,
+  details?: Record<string, any>,
+  mode: "normal" | "demo" = "demo"
+): Promise<WalletTopupResponse> {
+  return makeRequest<WalletTopupResponse>("POST", "/wallet/topups", { amount, method, details, mode });
 }
 
 export async function postWalletWebhook(

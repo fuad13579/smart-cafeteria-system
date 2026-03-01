@@ -334,6 +334,8 @@ class AdminRamadanVisibilityUpdateRequest(BaseModel):
 class WalletTopupRequest(BaseModel):
     amount: int = Field(gt=0, le=50000)
     method: str
+    details: dict[str, Any] | None = None
+    mode: str | None = None
 
 
 class WalletWebhookRequest(BaseModel):
@@ -2110,13 +2112,27 @@ def wallet_topup(
         raise HTTPException(status_code=401, detail="Missing or invalid token")
 
     method = payload.method.strip().upper()
+    if method in {"BKASH", "NAGAD", "BANK"}:
+        pass
+    elif method in {"BK", "NAG", "BNK"}:
+        method = "BKASH" if method == "BK" else ("NAGAD" if method == "NAG" else "BANK")
+    else:
+        # allow lowercase input contract like "bkash"
+        normalized = payload.method.strip().lower()
+        if normalized in {"bkash", "nagad", "bank"}:
+            method = normalized.upper()
     if method not in {"BANK", "BKASH", "NAGAD"}:
         raise HTTPException(status_code=422, detail="method must be BANK, BKASH, or NAGAD")
+    mode = (payload.mode or "normal").strip().lower()
+    if mode not in {"normal", "demo"}:
+        raise HTTPException(status_code=422, detail="mode must be normal or demo")
 
     student_id = auth["student_id"]
     key = (idempotency_key or "").strip() or None
     topup_id = f"topup-{uuid.uuid4().hex[:12]}"
-    reference_id = f"REF-{uuid.uuid4().hex[:10].upper()}"
+    details = payload.details or {}
+    provided_ref = str(details.get("reference_id") or "").strip()
+    reference_id = provided_ref or f"TOPUP-{uuid.uuid4().hex[:4].upper()}"
     redirect_url = f"https://pay.local/{method.lower()}/{topup_id}" if method in {"BKASH", "NAGAD"} else None
 
     with _db_conn() as conn:
@@ -2166,11 +2182,30 @@ def wallet_topup(
                 """,
                 (topup_id, student_id, payload.amount, method, reference_id, key),
             )
+
+            if mode == "demo" and method in {"BKASH", "NAGAD"}:
+                replayed, topup = _complete_topup(cur, topup_id, provider_ref=reference_id)
+                conn.commit()
+                return {
+                    "ok": True,
+                    "replayed": replayed,
+                    "message": "Demo top-up successful",
+                    "topup": {
+                        "topup_id": topup_id,
+                        "amount": payload.amount,
+                        "method": method,
+                        "status": "COMPLETED",
+                        "reference_id": reference_id,
+                        "redirect_url": None,
+                    },
+                    "account_balance": topup.get("account_balance"),
+                }
             conn.commit()
 
     return {
         "ok": True,
         "replayed": False,
+        "message": "Top-up created",
         "topup": {
             "topup_id": topup_id,
             "amount": payload.amount,
