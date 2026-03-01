@@ -3,11 +3,15 @@ set -euo pipefail
 
 MIGRATIONS_DIR="$(cd "$(dirname "$0")/migrations" && pwd)"
 
-: "${POSTGRES_HOST:=localhost}"
+# During postgres initdb hooks, socket connections are more reliable than TCP.
+# Keep host optional so local runs can use unix socket by default.
+: "${POSTGRES_HOST:=}"
 : "${POSTGRES_PORT:=5432}"
 : "${POSTGRES_DB:=cafeteria}"
 : "${POSTGRES_USER:=cafeteria}"
 : "${POSTGRES_PASSWORD:=cafeteria}"
+RETRY_COUNT="${RETRY_COUNT:-30}"
+RETRY_DELAY_SEC="${RETRY_DELAY_SEC:-1}"
 
 export PGPASSWORD="${POSTGRES_PASSWORD}"
 
@@ -16,15 +20,35 @@ if ! command -v psql >/dev/null 2>&1; then
   exit 1
 fi
 
+psql_base=(
+  psql
+  --username "${POSTGRES_USER}"
+  --dbname "${POSTGRES_DB}"
+  --set ON_ERROR_STOP=1
+)
+
+if [[ -n "${POSTGRES_HOST}" ]]; then
+  psql_base+=(--host "${POSTGRES_HOST}")
+fi
+
+if [[ -n "${POSTGRES_PORT}" ]]; then
+  psql_base+=(--port "${POSTGRES_PORT}")
+fi
+
+attempt=1
+until "${psql_base[@]}" --command "SELECT 1" >/dev/null 2>&1; do
+  if [[ "${attempt}" -ge "${RETRY_COUNT}" ]]; then
+    echo "Error: database is not ready after ${RETRY_COUNT} attempts"
+    exit 1
+  fi
+  echo "Waiting for database to be ready (${attempt}/${RETRY_COUNT})..."
+  sleep "${RETRY_DELAY_SEC}"
+  attempt=$((attempt + 1))
+done
+
 for file in "${MIGRATIONS_DIR}"/*.sql; do
   echo "Applying $(basename "$file")"
-  psql \
-    --host "${POSTGRES_HOST}" \
-    --port "${POSTGRES_PORT}" \
-    --username "${POSTGRES_USER}" \
-    --dbname "${POSTGRES_DB}" \
-    --set ON_ERROR_STOP=1 \
-    --file "$file"
+  "${psql_base[@]}" --file "$file"
 done
 
 echo "All migrations applied successfully."
