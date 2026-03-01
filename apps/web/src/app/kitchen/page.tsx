@@ -7,10 +7,13 @@ type KitchenOrder = {
   order_id: string;
   token_no: number;
   pickup_counter: number;
+  pickup_extend_count: number;
   status: "QUEUED" | "IN_PROGRESS" | "READY" | "COMPLETED" | "CANCELLED";
   eta_minutes: number;
   total_amount: number;
   ready_until?: string | null;
+  is_expired?: boolean;
+  created_at?: string | null;
   items: KitchenItem[];
 };
 
@@ -36,7 +39,7 @@ async function apiGetPeakMode(): Promise<boolean> {
   return !!data.peak_mode;
 }
 
-async function apiSetStatus(orderId: string, action: "start" | "ready" | "complete"): Promise<void> {
+async function apiSetStatus(orderId: string, action: "start" | "ready" | "complete" | "extend" | "cancel"): Promise<void> {
   const res = await fetch(`${API_ROOT}/admin/kitchen/orders/${encodeURIComponent(orderId)}/status`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
@@ -53,6 +56,7 @@ export default function KitchenPage() {
   const [err, setErr] = useState<string | null>(null);
   const [busy, setBusy] = useState<string | null>(null);
   const [peakMode, setPeakMode] = useState(false);
+  const [nowTs, setNowTs] = useState<number>(Date.now());
 
   const load = async () => {
     try {
@@ -73,7 +77,12 @@ export default function KitchenPage() {
     return () => clearInterval(t);
   }, []);
 
-  const changeStatus = async (orderId: string, action: "start" | "ready" | "complete") => {
+  useEffect(() => {
+    const t = setInterval(() => setNowTs(Date.now()), 1000);
+    return () => clearInterval(t);
+  }, []);
+
+  const changeStatus = async (orderId: string, action: "start" | "ready" | "complete" | "extend" | "cancel") => {
     try {
       setBusy(`${orderId}:${action}`);
       await apiSetStatus(orderId, action);
@@ -84,6 +93,27 @@ export default function KitchenPage() {
       setBusy(null);
     }
   };
+
+  const withMeta = orders.map((o) => {
+    const readyUntilDate = o.ready_until ? new Date(o.ready_until) : null;
+    const remainingSec = readyUntilDate ? Math.floor((readyUntilDate.getTime() - nowTs) / 1000) : null;
+    const expired = o.status === "READY" && (o.is_expired || (remainingSec !== null && remainingSec <= 0));
+    return { ...o, readyUntilDate, remainingSec, expired };
+  });
+
+  const sortedOrders = [...withMeta].sort((a, b) => {
+    const aReady = a.status === "READY";
+    const bReady = b.status === "READY";
+    if (aReady && bReady) {
+      if (a.expired !== b.expired) return a.expired ? -1 : 1;
+      const at = a.readyUntilDate ? a.readyUntilDate.getTime() : Number.MAX_SAFE_INTEGER;
+      const bt = b.readyUntilDate ? b.readyUntilDate.getTime() : Number.MAX_SAFE_INTEGER;
+      if (at !== bt) return at - bt;
+    }
+    const ac = a.created_at ? new Date(a.created_at).getTime() : 0;
+    const bc = b.created_at ? new Date(b.created_at).getTime() : 0;
+    return ac - bc;
+  });
 
   return (
     <div>
@@ -108,12 +138,19 @@ export default function KitchenPage() {
       )}
 
       <div className="mt-6 grid grid-cols-1 gap-3 md:grid-cols-2">
-        {orders.map((o) => (
-          <div key={o.order_id} className="rounded-2xl border border-zinc-200 bg-zinc-50 p-4 dark:border-zinc-900 dark:bg-zinc-950">
+        {sortedOrders.map((o) => (
+          <div
+            key={o.order_id}
+            className={[
+              "rounded-2xl border bg-zinc-50 p-4 dark:bg-zinc-950",
+              o.expired ? "border-amber-300 dark:border-amber-900" : "border-zinc-200 dark:border-zinc-900",
+            ].join(" ")}
+          >
             <div className="flex items-start justify-between">
               <div>
                 <div className="text-3xl font-bold text-zinc-900 dark:text-white">#{o.token_no}</div>
                 <div className="mt-1 text-sm text-zinc-700 dark:text-zinc-300">Counter {o.pickup_counter}</div>
+                <div className="mt-1 text-xs text-zinc-600 dark:text-zinc-500">Extensions used: {o.pickup_extend_count}/1</div>
                 <div className="mt-1 text-xs text-zinc-600 dark:text-zinc-500">{o.order_id}</div>
               </div>
               <div className="rounded-full bg-zinc-200 px-3 py-1 text-xs dark:bg-zinc-800">{o.status}</div>
@@ -127,13 +164,22 @@ export default function KitchenPage() {
               ))}
             </div>
 
-            {o.ready_until ? (
-              <div className="mt-3 text-xs text-zinc-600 dark:text-zinc-400">
-                Pickup before {new Date(o.ready_until).toLocaleTimeString()}
+            {o.ready_until && (
+              <div className={["mt-3 text-xs", o.expired ? "text-amber-700 dark:text-amber-300" : "text-zinc-600 dark:text-zinc-400"].join(" ")}>
+                {!o.expired ? (
+                  <>
+                    Pickup before {new Date(o.ready_until).toLocaleTimeString()}{" "}
+                    {o.remainingSec !== null && o.remainingSec > 0
+                      ? `(${Math.floor(o.remainingSec / 60)}m ${o.remainingSec % 60}s left)`
+                      : ""}
+                  </>
+                ) : (
+                  "Pickup window expired"
+                )}
               </div>
-            ) : null}
+            )}
 
-            <div className="mt-4 flex gap-2">
+            <div className="mt-4 flex flex-wrap gap-2">
               <button
                 onClick={() => changeStatus(o.order_id, "start")}
                 disabled={!peakMode || o.status !== "QUEUED" || busy === `${o.order_id}:start`}
@@ -154,6 +200,20 @@ export default function KitchenPage() {
                 className="rounded-lg border border-emerald-300 px-3 py-1 text-xs text-emerald-700 hover:bg-emerald-50 disabled:opacity-40 dark:border-emerald-900 dark:text-emerald-300 dark:hover:bg-emerald-950/40"
               >
                 Complete
+              </button>
+              <button
+                onClick={() => changeStatus(o.order_id, "extend")}
+                disabled={!peakMode || o.status !== "READY" || !o.expired || o.pickup_extend_count >= 1 || busy === `${o.order_id}:extend`}
+                className="rounded-lg border border-blue-300 px-3 py-1 text-xs text-blue-700 hover:bg-blue-50 disabled:opacity-40 dark:border-blue-900 dark:text-blue-300 dark:hover:bg-blue-950/40"
+              >
+                Extend +10m
+              </button>
+              <button
+                onClick={() => changeStatus(o.order_id, "cancel")}
+                disabled={!peakMode || o.status !== "READY" || busy === `${o.order_id}:cancel`}
+                className="rounded-lg border border-red-300 px-3 py-1 text-xs text-red-700 hover:bg-red-50 disabled:opacity-40 dark:border-red-900 dark:text-red-300 dark:hover:bg-red-950/40"
+              >
+                No-show / Cancel
               </button>
             </div>
           </div>

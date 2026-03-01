@@ -1004,6 +1004,7 @@ def _ensure_order_slip_schema() -> None:
             cur.execute("ALTER TABLE orders ADD COLUMN IF NOT EXISTS ready_until TIMESTAMPTZ")
             cur.execute("ALTER TABLE orders ADD COLUMN IF NOT EXISTS printed_at TIMESTAMPTZ")
             cur.execute("ALTER TABLE orders ADD COLUMN IF NOT EXISTS slip_version INTEGER NOT NULL DEFAULT 1")
+            cur.execute("ALTER TABLE orders ADD COLUMN IF NOT EXISTS pickup_extend_count INTEGER NOT NULL DEFAULT 0")
             cur.execute("CREATE UNIQUE INDEX IF NOT EXISTS uq_orders_token_no ON orders(token_no)")
             cur.execute("CREATE UNIQUE INDEX IF NOT EXISTS ux_orders_token_no ON orders(token_no)")
             conn.commit()
@@ -2402,10 +2403,12 @@ def admin_kitchen_orders(
                     o.id,
                     o.token_no,
                     o.pickup_counter,
+                    o.pickup_extend_count,
                     o.status,
                     o.eta_minutes,
                     o.total_amount,
                     o.ready_until,
+                    (o.status = 'READY' AND o.ready_until IS NOT NULL AND o.ready_until <= NOW()) AS is_expired,
                     o.created_at,
                     COALESCE(
                         json_agg(
@@ -2418,7 +2421,7 @@ def admin_kitchen_orders(
                 LEFT JOIN order_items oi ON oi.order_id = o.id
                 LEFT JOIN menu_items mi ON mi.id = oi.item_id
                 WHERE o.status IN ('QUEUED', 'IN_PROGRESS', 'READY')
-                GROUP BY o.id, o.token_no, o.pickup_counter, o.status, o.eta_minutes, o.total_amount, o.ready_until, o.created_at
+                GROUP BY o.id, o.token_no, o.pickup_counter, o.pickup_extend_count, o.status, o.eta_minutes, o.total_amount, o.ready_until, o.created_at
                 ORDER BY o.created_at ASC
                 LIMIT 200
                 """
@@ -2432,12 +2435,14 @@ def admin_kitchen_orders(
                 "order_id": row[0],
                 "token_no": int(row[1]),
                 "pickup_counter": int(row[2]),
-                "status": row[3],
-                "eta_minutes": int(row[4]),
-                "total_amount": int(row[5]),
-                "ready_until": row[6].isoformat() if row[6] else None,
-                "created_at": row[7].isoformat() if row[7] else None,
-                "items": row[8] if isinstance(row[8], list) else [],
+                "pickup_extend_count": int(row[3]),
+                "status": row[4],
+                "eta_minutes": int(row[5]),
+                "total_amount": int(row[6]),
+                "ready_until": row[7].isoformat() if row[7] else None,
+                "is_expired": bool(row[8]),
+                "created_at": row[9].isoformat() if row[9] else None,
+                "items": row[10] if isinstance(row[10], list) else [],
             }
             for row in rows
         ]
@@ -2483,17 +2488,22 @@ def admin_kitchen_set_status(
 ):
     _require_admin(authorization, access_token)
     action = payload.action.strip().lower()
-    if action not in {"start", "ready", "complete"}:
-        raise HTTPException(status_code=422, detail="action must be start|ready|complete")
+    if action not in {"start", "ready", "complete", "extend", "cancel"}:
+        raise HTTPException(status_code=422, detail="action must be start|ready|complete|extend|cancel")
     if not _get_peak_mode():
         raise HTTPException(status_code=409, detail="Manual kitchen controls are disabled (peak mode is OFF)")
 
-    target_status = "IN_PROGRESS" if action == "start" else ("READY" if action == "ready" else "COMPLETED")
+    target_status = (
+        "IN_PROGRESS"
+        if action == "start"
+        else ("READY" if action in {"ready", "extend"} else ("COMPLETED" if action == "complete" else "CANCELLED"))
+    )
     expected_current = "QUEUED" if action == "start" else ("IN_PROGRESS" if action == "ready" else "READY")
     eta = 7 if action == "start" else 0
     now = datetime.now(timezone.utc)
     ready_at = now if action == "ready" else None
     ready_until = now + timedelta(minutes=_ready_window_minutes()) if action == "ready" else None
+    extended_until = now + timedelta(minutes=10) if action == "extend" else None
 
     with _db_conn() as conn:
         with conn.cursor() as cur:
@@ -2503,9 +2513,23 @@ def admin_kitchen_set_status(
                     UPDATE orders
                     SET status = %s, eta_minutes = %s, ready_at = %s, ready_until = %s
                     WHERE id = %s AND status = %s
-                    RETURNING token_no, pickup_counter
+                    RETURNING token_no, pickup_counter, ready_until, pickup_extend_count
                     """,
                     (target_status, eta, ready_at, ready_until, order_id, expected_current),
+                )
+            elif action == "extend":
+                cur.execute(
+                    """
+                    UPDATE orders
+                    SET ready_until = %s, pickup_extend_count = pickup_extend_count + 1
+                    WHERE id = %s
+                      AND status = 'READY'
+                      AND ready_until IS NOT NULL
+                      AND ready_until <= %s
+                      AND pickup_extend_count < 1
+                    RETURNING token_no, pickup_counter, ready_until, pickup_extend_count
+                    """,
+                    (extended_until, order_id, now),
                 )
             else:
                 cur.execute(
@@ -2513,42 +2537,57 @@ def admin_kitchen_set_status(
                     UPDATE orders
                     SET status = %s, eta_minutes = %s
                     WHERE id = %s AND status = %s
-                    RETURNING token_no, pickup_counter, ready_until
+                    RETURNING token_no, pickup_counter, ready_until, pickup_extend_count
                     """,
                     (target_status, eta, order_id, expected_current),
                 )
             row = cur.fetchone()
             if not row:
+                if action == "extend":
+                    raise HTTPException(status_code=409, detail="Pickup extension not allowed (already extended or not expired)")
                 raise HTTPException(status_code=409, detail="Invalid status transition")
             conn.commit()
 
     token_no = int(row[0])
     pickup_counter = int(row[1])
-    resolved_ready_until = ready_until if action == "ready" else (row[2] if len(row) > 2 else None)
+    resolved_ready_until = (
+        ready_until
+        if action == "ready"
+        else (extended_until if action == "extend" else (row[2] if len(row) > 2 else None))
+    )
+    pickup_extend_count = int(row[3]) if len(row) > 3 and row[3] is not None else 0
+    event_type = "order.pickup_extended" if action == "extend" else "order.status.changed"
+    event_from_status = "READY" if action == "extend" else expected_current
+    event_to_status = "READY" if action == "extend" else target_status
+    is_expired = bool(target_status == "READY" and resolved_ready_until and resolved_ready_until <= now)
     _publish_queue(
         "order.status",
         {
-            "event": "order.status.changed",
+            "event": event_type,
             "type": "order.status",
             "event_id": f"evt-{int(time.time()*1000)}",
             "occurred_at": datetime.now(timezone.utc).replace(microsecond=0).isoformat().replace("+00:00", "Z"),
             "order_id": order_id,
-            "from_status": expected_current,
-            "to_status": target_status,
-            "status": target_status,
+            "from_status": event_from_status,
+            "to_status": event_to_status,
+            "status": event_to_status,
             "eta_minutes": eta,
             "token_no": token_no,
             "pickup_counter": pickup_counter,
+            "pickup_extend_count": pickup_extend_count,
             "ready_until": resolved_ready_until.isoformat() if resolved_ready_until else None,
+            "is_expired": is_expired,
         },
     )
     return {
         "ok": True,
         "order_id": order_id,
-        "status": target_status,
+        "status": event_to_status,
         "token_no": token_no,
         "pickup_counter": pickup_counter,
+        "pickup_extend_count": pickup_extend_count,
         "ready_until": resolved_ready_until.isoformat() if resolved_ready_until else None,
+        "is_expired": is_expired,
     }
 
 
@@ -2795,7 +2834,7 @@ def get_order(
     with _db_conn() as conn:
         with conn.cursor() as cur:
             cur.execute(
-                "SELECT id, student_id, token_no, pickup_counter, ready_at, ready_until, status, eta_minutes, total_amount, created_at FROM orders WHERE id = %s",
+                "SELECT id, student_id, token_no, pickup_counter, ready_at, ready_until, pickup_extend_count, status, eta_minutes, total_amount, created_at FROM orders WHERE id = %s",
                 (order_id,),
             )
             row = cur.fetchone()
@@ -2803,6 +2842,8 @@ def get_order(
                 raise HTTPException(status_code=404, detail="Order not found")
             if row[1] != student_id:
                 raise HTTPException(status_code=403, detail="Forbidden")
+            now = datetime.now(timezone.utc)
+            is_expired = bool(row[7] == "READY" and row[5] and row[5] <= now)
 
             return {
                 "order_id": row[0],
@@ -2811,10 +2852,12 @@ def get_order(
                 "pickup_counter": int(row[3]),
                 "ready_at": row[4].isoformat() if row[4] else None,
                 "ready_until": row[5].isoformat() if row[5] else None,
-                "status": row[6],
-                "eta_minutes": row[7],
-                "total_amount": row[8],
-                "created_at": row[9].isoformat() if row[9] else None,
+                "pickup_extend_count": int(row[6]) if row[6] is not None else 0,
+                "status": row[7],
+                "eta_minutes": row[8],
+                "total_amount": row[9],
+                "created_at": row[10].isoformat() if row[10] else None,
+                "is_expired": is_expired,
             }
 
 
@@ -2981,7 +3024,7 @@ def get_my_orders(
         with conn.cursor() as cur:
             cur.execute(
                 """
-                SELECT id, token_no, pickup_counter, ready_at, ready_until, status, eta_minutes, total_amount, created_at
+                SELECT id, token_no, pickup_counter, ready_at, ready_until, pickup_extend_count, status, eta_minutes, total_amount, created_at
                 FROM orders
                 WHERE student_id = %s
                 ORDER BY created_at DESC
@@ -2989,6 +3032,7 @@ def get_my_orders(
                 (student_id,),
             )
             rows = cur.fetchall()
+            now = datetime.now(timezone.utc)
 
     return {
         "orders": [
@@ -2998,10 +3042,12 @@ def get_my_orders(
                 "pickup_counter": int(row[2]),
                 "ready_at": row[3].isoformat() if row[3] else None,
                 "ready_until": row[4].isoformat() if row[4] else None,
-                "status": row[5],
-                "eta_minutes": row[6],
-                "total_amount": row[7],
-                "created_at": row[8].isoformat() if row[8] else None,
+                "pickup_extend_count": int(row[5]) if row[5] is not None else 0,
+                "status": row[6],
+                "eta_minutes": row[7],
+                "total_amount": row[8],
+                "created_at": row[9].isoformat() if row[9] else None,
+                "is_expired": bool(row[6] == "READY" and row[4] and row[4] <= now),
             }
             for row in rows
         ]

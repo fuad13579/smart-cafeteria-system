@@ -81,8 +81,10 @@ interface OrderResponse {
   order_id: string;
   token_no?: number;
   pickup_counter?: number;
+  pickup_extend_count?: number;
   ready_at?: string | null;
   ready_until?: string | null;
+  is_expired?: boolean;
   status: OrderStatus;
   eta_minutes: number;
 }
@@ -91,8 +93,10 @@ export interface OrderDetails {
   order_id: string;
   token_no?: number;
   pickup_counter?: number;
+  pickup_extend_count?: number;
   ready_at?: string | null;
   ready_until?: string | null;
+  is_expired?: boolean;
   status: OrderStatus;
   eta_minutes: number;
   student_id?: string;

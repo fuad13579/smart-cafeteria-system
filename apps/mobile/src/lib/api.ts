@@ -23,6 +23,8 @@ export type OrderDetails = {
   order_id: string;
   status: OrderStatus;
   eta_minutes: number;
+  ready_until?: string | null;
+  is_expired?: boolean;
   student_id?: string;
   total_amount?: number;
   created_at?: string;
@@ -59,15 +61,15 @@ function mockOrderFromId(orderId: string): OrderDetails {
   const ageSec = Math.max(0, Math.floor((now - base) / 1000));
 
   if (ageSec < 8) {
-    return { order_id: orderId, status: "QUEUED", eta_minutes: 12 };
+    return { order_id: orderId, status: "QUEUED", eta_minutes: 12, ready_until: null, is_expired: false };
   }
   if (ageSec < 16) {
-    return { order_id: orderId, status: "IN_PROGRESS", eta_minutes: 7 };
+    return { order_id: orderId, status: "IN_PROGRESS", eta_minutes: 7, ready_until: null, is_expired: false };
   }
   if (ageSec < 24) {
-    return { order_id: orderId, status: "READY", eta_minutes: 0 };
+    return { order_id: orderId, status: "READY", eta_minutes: 0, ready_until: new Date(Date.now() + 14 * 60 * 1000).toISOString(), is_expired: false };
   }
-  return { order_id: orderId, status: "COMPLETED", eta_minutes: 0 };
+  return { order_id: orderId, status: "COMPLETED", eta_minutes: 0, ready_until: null, is_expired: false };
 }
 
 function parseApiErrorMessage(raw: any, fallback: string): string {

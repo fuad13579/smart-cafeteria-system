@@ -36,6 +36,7 @@ export default function OrderPage() {
   const [tokenNo, setTokenNo] = useState<number | null>(null);
   const [pickupCounter, setPickupCounter] = useState<number | null>(null);
   const [readyUntil, setReadyUntil] = useState<string | null>(null);
+  const [serverExpired, setServerExpired] = useState<boolean>(false);
   const [nowTs, setNowTs] = useState<number>(Date.now());
 
   useEffect(() => {
@@ -55,6 +56,7 @@ export default function OrderPage() {
         setTokenNo(typeof res.token_no === "number" ? res.token_no : null);
         setPickupCounter(typeof res.pickup_counter === "number" ? res.pickup_counter : null);
         setReadyUntil(typeof res.ready_until === "string" ? res.ready_until : null);
+        setServerExpired(Boolean(res.is_expired));
         setEta(Math.max(0, res.eta_minutes ?? 0));
         if (terminalStates.includes(res.status) && pollRef) {
           clearInterval(pollRef);
@@ -106,6 +108,7 @@ export default function OrderPage() {
           if (typeof payload?.token_no === "number") setTokenNo(payload.token_no);
           if (typeof payload?.pickup_counter === "number") setPickupCounter(payload.pickup_counter);
           if (typeof payload?.ready_until === "string") setReadyUntil(payload.ready_until);
+          if (typeof payload?.is_expired === "boolean") setServerExpired(payload.is_expired);
           if (typeof payload?.eta_minutes === "number") {
             setEta(Math.max(0, payload.eta_minutes));
           }
@@ -145,6 +148,7 @@ export default function OrderPage() {
         setTokenNo(typeof res.token_no === "number" ? res.token_no : null);
         setPickupCounter(typeof res.pickup_counter === "number" ? res.pickup_counter : null);
         setReadyUntil(typeof res.ready_until === "string" ? res.ready_until : null);
+        setServerExpired(Boolean(res.is_expired));
         setEta(Math.max(0, res.eta_minutes ?? 0));
       })
       .catch((e: any) => setErr(e?.message ?? "Failed to load order status"))
@@ -168,7 +172,7 @@ export default function OrderPage() {
 
   const readyUntilDate = readyUntil ? new Date(readyUntil) : null;
   const readyDiffSec = readyUntilDate ? Math.floor((readyUntilDate.getTime() - nowTs) / 1000) : null;
-  const readyExpired = status === "READY" && readyDiffSec !== null && readyDiffSec <= 0;
+  const readyExpired = status === "READY" && (serverExpired || (readyDiffSec !== null && readyDiffSec <= 0));
   const countdownLabel =
     readyDiffSec !== null && readyDiffSec > 0
       ? `${Math.floor(readyDiffSec / 60)
@@ -248,7 +252,7 @@ export default function OrderPage() {
                 ) : null}
               </>
             ) : (
-              <span>Pickup window expired - contact counter.</span>
+              <span>Pickup window expired - go to counter.</span>
             )}
           </div>
         )}

@@ -17,6 +17,9 @@ export default function OrderScreen({ route, navigation }: Props) {
   const { id } = route.params;
   const [status, setStatus] = useState<OrderStatus>("QUEUED");
   const [eta, setEta] = useState(12);
+  const [readyUntil, setReadyUntil] = useState<string | null>(null);
+  const [serverExpired, setServerExpired] = useState(false);
+  const [nowTs, setNowTs] = useState<number>(Date.now());
   const [loading, setLoading] = useState(true);
   const [err, setErr] = useState<string | null>(null);
 
@@ -32,6 +35,8 @@ export default function OrderScreen({ route, navigation }: Props) {
         setErr(null);
         setStatus(res.status);
         setEta(Math.max(0, res.eta_minutes ?? 0));
+        setReadyUntil(typeof res.ready_until === "string" ? res.ready_until : null);
+        setServerExpired(Boolean(res.is_expired));
         if (terminalStates.includes(res.status) && pollRef) {
           clearInterval(pollRef);
           pollRef = null;
@@ -79,6 +84,8 @@ export default function OrderScreen({ route, navigation }: Props) {
           const nextStatus = payload?.to_status as OrderStatus | undefined;
           if (!nextStatus) return;
           setStatus(nextStatus);
+          if (typeof payload?.ready_until === "string") setReadyUntil(payload.ready_until);
+          if (typeof payload?.is_expired === "boolean") setServerExpired(payload.is_expired);
           if (typeof payload?.eta_minutes === "number") {
             setEta(Math.max(0, payload.eta_minutes));
           }
@@ -117,12 +124,29 @@ export default function OrderScreen({ route, navigation }: Props) {
       setErr(null);
       setStatus(res.status);
       setEta(Math.max(0, res.eta_minutes ?? 0));
+      setReadyUntil(typeof res.ready_until === "string" ? res.ready_until : null);
+      setServerExpired(Boolean(res.is_expired));
     } catch (e: any) {
       setErr(e?.message ?? "Failed to load order status");
     } finally {
       setLoading(false);
     }
   };
+
+  useEffect(() => {
+    const t = setInterval(() => setNowTs(Date.now()), 1000);
+    return () => clearInterval(t);
+  }, []);
+
+  const readyUntilDate = readyUntil ? new Date(readyUntil) : null;
+  const readyDiffSec = readyUntilDate ? Math.floor((readyUntilDate.getTime() - nowTs) / 1000) : null;
+  const readyExpired = status === "READY" && (serverExpired || (readyDiffSec !== null && readyDiffSec <= 0));
+  const countdownLabel =
+    readyDiffSec !== null && readyDiffSec > 0
+      ? `${Math.floor(readyDiffSec / 60)
+          .toString()
+          .padStart(2, "0")}:${(readyDiffSec % 60).toString().padStart(2, "0")}`
+      : null;
 
   return (
     <View style={{ flex: 1, padding: 18, gap: 12 }}>
@@ -158,6 +182,19 @@ export default function OrderScreen({ route, navigation }: Props) {
           <Text style={{ color: "#e4e4e7" }}>
             Estimated time: <Text style={{ fontWeight: "700" }}>{eta} min</Text>
           </Text>
+          {status === "READY" && (
+            <View style={{ marginTop: 8, borderRadius: 10, borderWidth: 1, borderColor: readyExpired ? "#92400e" : "#065f46", padding: 8, backgroundColor: readyExpired ? "rgba(146,64,14,0.18)" : "rgba(6,95,70,0.16)" }}>
+              {!readyExpired ? (
+                <Text style={{ color: "#e5e7eb", fontSize: 12 }}>
+                  Ready for pickup until{" "}
+                  <Text style={{ fontWeight: "700" }}>{readyUntilDate ? readyUntilDate.toLocaleTimeString() : "-"}</Text>
+                  {countdownLabel ? ` (${countdownLabel})` : ""}
+                </Text>
+              ) : (
+                <Text style={{ color: "#fde68a", fontSize: 12 }}>Pickup window expired — go to counter.</Text>
+              )}
+            </View>
+          )}
           <Text style={{ color: "#71717a", fontSize: 12, marginTop: 4 }}>Updates every 4 seconds while order is active.</Text>
         </View>
 
