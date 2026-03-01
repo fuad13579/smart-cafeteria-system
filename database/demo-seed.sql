@@ -8,8 +8,7 @@ ON CONFLICT (student_id) DO UPDATE
 SET full_name = EXCLUDED.full_name,
     password = EXCLUDED.password,
     account_balance = EXCLUDED.account_balance,
-    is_active = EXCLUDED.is_active,
-    updated_at = NOW();
+    is_active = EXCLUDED.is_active;
 
 INSERT INTO menu_items (id, name, price, stock_quantity, available)
 VALUES
@@ -19,8 +18,7 @@ ON CONFLICT (id) DO UPDATE
 SET name = EXCLUDED.name,
     price = EXCLUDED.price,
     stock_quantity = EXCLUDED.stock_quantity,
-    available = EXCLUDED.available,
-    updated_at = NOW();
+    available = EXCLUDED.available;
 
 DELETE FROM menu_items WHERE id NOT IN ('1', '2');
 

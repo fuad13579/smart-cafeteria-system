@@ -1,0 +1,10 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="96" height="96" viewBox="0 0 96 96" role="img" aria-label="bKash logo">
+  <rect width="96" height="96" rx="18" fill="#E2136E"/>
+  <g fill="#fff">
+    <polygon points="22,26 47,36 36,47"/>
+    <polygon points="47,36 66,29 60,48"/>
+    <polygon points="36,47 47,36 51,58"/>
+    <polygon points="51,58 69,52 58,69"/>
+    <polygon points="36,47 31,70 51,58"/>
+  </g>
+</svg>

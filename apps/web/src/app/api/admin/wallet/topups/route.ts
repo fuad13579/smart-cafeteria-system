@@ -1,6 +1,8 @@
 import { NextResponse } from "next/server";
 import { cookies } from "next/headers";
 
+export const dynamic = "force-dynamic";
+
 const GATEWAY_BASE = process.env.NEXT_PUBLIC_API_BASE_URL || "http://localhost:8002";
 const API_PREFIX = process.env.NEXT_PUBLIC_API_PREFIX || "/api";
 const ACCESS_COOKIE_NAME = process.env.ACCESS_COOKIE_NAME || "access_token";
@@ -21,8 +23,12 @@ export async function GET(req: Request) {
   try {
     const url = new URL(req.url);
     const status = url.searchParams.get("status") || "pending";
+    const cookieHeader = req.headers.get("cookie") ?? "";
     const res = await fetch(resolveGatewayUrl(`/admin/wallet/topups?status=${encodeURIComponent(status)}`), {
-      headers: { ...(await authHeader()) },
+      headers: {
+        ...(await authHeader()),
+        ...(cookieHeader ? { cookie: cookieHeader } : {}),
+      },
       cache: "no-store",
     });
     const data = await res.json().catch(() => ({}));

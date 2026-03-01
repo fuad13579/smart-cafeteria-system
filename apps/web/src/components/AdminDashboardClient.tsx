@@ -83,6 +83,10 @@ function StatCard({ title, value, sub }: { title: string; value: string; sub: st
   );
 }
 
+function toTitleCase(value: string): string {
+  return value.charAt(0).toUpperCase() + value.slice(1);
+}
+
 export function AdminDashboardClient() {
   const [health, setHealth] = useState<HealthResp | null>(null);
   const [metrics, setMetrics] = useState<MetricsResp | null>(null);
@@ -185,7 +189,10 @@ export function AdminDashboardClient() {
 
   async function loadWalletTopups(nextFilter: "pending" | "success" | "failed" | "all" = walletFilter) {
     try {
-      const res = await fetch(`/api/admin/wallet/topups?status=${encodeURIComponent(nextFilter)}`, { cache: "no-store" });
+      const res = await fetch(`/api/admin/wallet/topups?status=${encodeURIComponent(nextFilter)}`, {
+        cache: "no-store",
+        credentials: "include",
+      });
       const data = await res.json();
       if (!res.ok) throw new Error(data?.detail ?? data?.error ?? "Failed to load wallet topups");
       setWalletTopups(data.topups ?? []);
@@ -512,6 +519,7 @@ export function AdminDashboardClient() {
       const res = await fetch(`/api/admin/wallet/topups/${topupId}/review`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
+        credentials: "include",
         body: JSON.stringify({ action }),
       });
       const data = await res.json();
@@ -752,6 +760,9 @@ export function AdminDashboardClient() {
         <p className="mt-2 text-sm text-zinc-600 dark:text-zinc-400">
           Add, edit, and toggle menu items for daily updates.
         </p>
+        <p className="mt-1 text-xs text-zinc-500 dark:text-zinc-400">
+          Archived items stay for order history.
+        </p>
 
         <div className="mt-4 grid grid-cols-1 gap-3 sm:grid-cols-4">
           <input
@@ -831,7 +842,7 @@ export function AdminDashboardClient() {
                   <td className="py-2 pr-3">{item.name}</td>
                   <td className="py-2 pr-3">{item.price}</td>
                   <td className="py-2 pr-3">{item.stock_quantity}</td>
-                  <td className="py-2 pr-3">{item.available ? "Available" : "Hidden"}</td>
+                  <td className="py-2 pr-3">{item.available ? "Available" : "Archived"}</td>
                   <td className="py-2 pr-3">
                     <div className="flex flex-wrap gap-2">
                       <button
@@ -850,7 +861,7 @@ export function AdminDashboardClient() {
                         onClick={() => onToggleAvailability(item)}
                         className="rounded-lg border border-zinc-300 px-2 py-1 text-xs hover:bg-zinc-100 dark:border-zinc-800 dark:hover:bg-zinc-900"
                       >
-                        {item.available ? "Hide" : "Show"}
+                        {item.available ? "Archive" : "Show"}
                       </button>
                     </div>
                   </td>
@@ -862,7 +873,7 @@ export function AdminDashboardClient() {
       </div>
 
       <div className="mt-6 rounded-2xl border border-zinc-200 bg-zinc-50 p-4 dark:border-zinc-900 dark:bg-zinc-950">
-        <div className="text-sm font-medium">Menu Windows (Iftar/Saheri)</div>
+        <div className="text-sm font-medium">Menu Windows (Iftar/Suhoor)</div>
         <p className="mt-2 text-sm text-zinc-600 dark:text-zinc-400">
           Define Ramadan time windows and assign menu item IDs (comma-separated).
         </p>
@@ -873,8 +884,8 @@ export function AdminDashboardClient() {
             onChange={(e) => setWindowName(e.target.value as "iftar" | "saheri")}
             className="rounded-xl border border-zinc-300 bg-white px-3 py-2 text-sm text-zinc-900 outline-none focus:border-zinc-500 dark:border-zinc-800 dark:bg-zinc-950 dark:text-zinc-100 dark:focus:border-zinc-600"
           >
-            <option value="iftar">iftar</option>
-            <option value="saheri">saheri</option>
+            <option value="iftar">Iftar</option>
+            <option value="saheri">Suhoor</option>
           </select>
           <input
             value={windowStartDate}
@@ -981,7 +992,7 @@ export function AdminDashboardClient() {
               {windows.map((w) => (
                 <tr key={w.id} className="border-t border-zinc-200 dark:border-zinc-900">
                   <td className="py-2 pr-3">{w.id}</td>
-                  <td className="py-2 pr-3">{w.name}</td>
+                  <td className="py-2 pr-3">{w.name === "saheri" ? "Suhoor" : "Iftar"}</td>
                   <td className="py-2 pr-3">{w.start_date} to {w.end_date}</td>
                   <td className="py-2 pr-3">{w.start_time.slice(0, 5)} to {w.end_time.slice(0, 5)}</td>
                   <td className="py-2 pr-3">{w.item_ids.join(", ") || "-"}</td>
@@ -1079,7 +1090,7 @@ export function AdminDashboardClient() {
                   : "border-zinc-300 text-zinc-700 hover:bg-zinc-100 dark:border-zinc-800 dark:text-zinc-200 dark:hover:bg-zinc-900",
               ].join(" ")}
             >
-              {m}
+              {toTitleCase(m)}
             </button>
           ))}
         </div>
@@ -1096,7 +1107,7 @@ export function AdminDashboardClient() {
                   : "border-zinc-300 text-zinc-700 hover:bg-zinc-100 dark:border-zinc-800 dark:text-zinc-200 dark:hover:bg-zinc-900",
               ].join(" ")}
             >
-              {s}
+              {toTitleCase(s)}
             </button>
           ))}
         </div>
@@ -1146,8 +1157,8 @@ export function AdminDashboardClient() {
             <tbody>
               {slotRows.map((r) => (
                 <tr key={r.id} className="border-t border-zinc-200 dark:border-zinc-900">
-                  <td className="py-2 pr-3">{r.main}</td>
-                  <td className="py-2 pr-3">{r.slot}</td>
+                  <td className="py-2 pr-3">{toTitleCase(r.main)}</td>
+                  <td className="py-2 pr-3">{toTitleCase(r.slot)}</td>
                   <td className="py-2 pr-3">{r.item_ids.join(", ") || "-"}</td>
                   <td className="py-2 pr-3">
                     <button

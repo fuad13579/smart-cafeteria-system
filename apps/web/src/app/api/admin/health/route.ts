@@ -1,58 +1,74 @@
 import { NextResponse } from "next/server";
-import net from "node:net";
 
 type Status = "up" | "down" | "degraded";
 
-async function fetchHealth(name: string, url: string, timeoutMs = 800): Promise<{ name: string; status: Status }> {
+type ServiceStatus = {
+  name: string;
+  status: Status;
+  detail?: string;
+};
+
+function resolveGatewayBase(): string {
+  const raw =
+    process.env.ADMIN_HEALTH_GATEWAY_URL ||
+    process.env.NEXT_PUBLIC_API_BASE_URL ||
+    "http://localhost:8002";
+  return raw.replace(/\/+$/, "");
+}
+
+function parseChecksFromEnv(): Array<{ name: string; url: string }> {
+  const raw = process.env.ADMIN_HEALTH_CHECKS_JSON;
+  if (!raw) {
+    const gateway = resolveGatewayBase();
+    return [{ name: "order-gateway", url: `${gateway}/health` }];
+  }
+
+  try {
+    const parsed = JSON.parse(raw);
+    if (!Array.isArray(parsed)) return [];
+    return parsed
+      .map((entry) => {
+        if (!entry || typeof entry !== "object") return null;
+        const name = typeof entry.name === "string" ? entry.name.trim() : "";
+        const url = typeof entry.url === "string" ? entry.url.trim() : "";
+        if (!name || !url) return null;
+        return { name, url };
+      })
+      .filter((x): x is { name: string; url: string } => !!x);
+  } catch {
+    return [];
+  }
+}
+
+async function fetchHealth(name: string, url: string, timeoutMs = 1200): Promise<ServiceStatus> {
   try {
     const ctrl = new AbortController();
     const t = setTimeout(() => ctrl.abort(), timeoutMs);
     const res = await fetch(url, { signal: ctrl.signal, cache: "no-store" });
     clearTimeout(t);
 
-    if (!res.ok) return { name, status: "down" };
+    if (!res.ok) {
+      return { name, status: "down", detail: `HTTP ${res.status}` };
+    }
 
-    // Optional: if service returns JSON {status:"ok"}, treat as up
     return { name, status: "up" };
   } catch {
-    return { name, status: "down" };
+    return { name, status: "down", detail: "unreachable" };
   }
 }
 
-function tcpCheck(name: string, host: string, port: number, timeoutMs = 500): Promise<{ name: string; status: Status }> {
-  return new Promise((resolve) => {
-    const socket = new net.Socket();
-
-    const done = (status: Status) => {
-      try {
-        socket.destroy();
-      } catch {}
-      resolve({ name, status });
-    };
-
-    socket.setTimeout(timeoutMs);
-    socket.once("error", () => done("down"));
-    socket.once("timeout", () => done("down"));
-    socket.connect(port, host, () => done("up"));
-  });
-}
-
 export async function GET() {
-  // Your docker-compose exposed ports (as shown in `docker compose ps`)
-  const checks = await Promise.all([
-    fetchHealth("identity-provider", "http://localhost:8001/health"),
-    fetchHealth("order-gateway", "http://localhost:8002/health"),
-    fetchHealth("stock-service", "http://localhost:8003/health"),
-    fetchHealth("kitchen-queue", "http://localhost:8004/health"),
-    fetchHealth("notification-hub", "http://localhost:8005/health"),
-
-    tcpCheck("postgres", "127.0.0.1", 5432),
-    tcpCheck("redis", "127.0.0.1", 6379),
-    tcpCheck("rabbitmq(amqp)", "127.0.0.1", 5672),
-
-    // Optional: RabbitMQ management UI health via HTTP
-    fetchHealth("rabbitmq(ui)", "http://localhost:15672", 800),
-  ]);
+  const checksCfg = parseChecksFromEnv();
+  const checks =
+    checksCfg.length > 0
+      ? await Promise.all(checksCfg.map((c) => fetchHealth(c.name, c.url)))
+      : ([
+          {
+            name: "admin-health-config",
+            status: "degraded",
+            detail: "No ADMIN_HEALTH_CHECKS_JSON configured",
+          },
+        ] satisfies ServiceStatus[]);
 
   return NextResponse.json({
     services: checks,

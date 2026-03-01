@@ -1,5 +1,6 @@
 "use client";
 
+import Image from "next/image";
 import { useEffect, useMemo, useState } from "react";
 import {
   createWalletTopup,
@@ -15,14 +16,36 @@ import { useToast } from "@/components/ToastProvider";
 type TxFilter = "all" | "success" | "pending" | "failed";
 
 function MethodLogo({ method }: { method: WalletMethod }) {
-  const style =
+  const pngSrc =
     method === "BKASH"
-      ? "bg-pink-100 text-pink-700 dark:bg-pink-950/40 dark:text-pink-300"
+      ? "/payments/bkash.png"
       : method === "NAGAD"
-      ? "bg-orange-100 text-orange-700 dark:bg-orange-950/40 dark:text-orange-300"
-      : "bg-blue-100 text-blue-700 dark:bg-blue-950/40 dark:text-blue-300";
-  const label = method === "BKASH" ? "bK" : method === "NAGAD" ? "Ng" : "Bk";
-  return <span className={`inline-flex h-6 w-6 items-center justify-center rounded-full text-[10px] font-semibold ${style}`}>{label}</span>;
+      ? "/payments/nagad.png"
+      : "/payments/bank.png";
+  const svgFallback =
+    method === "BKASH"
+      ? "/payments/bkash.svg"
+      : method === "NAGAD"
+      ? "/payments/nagad.svg"
+      : "/payments/bank.svg";
+  const [src, setSrc] = useState<string>(pngSrc);
+  useEffect(() => {
+    setSrc(pngSrc);
+  }, [pngSrc]);
+  const label = method === "BKASH" ? "bKash" : method === "NAGAD" ? "Nagad" : "Bank";
+  return (
+    <span className="inline-flex h-6 w-6 overflow-hidden rounded-full border border-zinc-200 dark:border-zinc-700">
+      <Image
+        src={src}
+        alt={`${label} logo`}
+        width={24}
+        height={24}
+        className="h-6 w-6 object-cover"
+        onError={() => setSrc(svgFallback)}
+        unoptimized
+      />
+    </span>
+  );
 }
 
 export default function WalletPage() {
@@ -41,7 +64,7 @@ export default function WalletPage() {
   const [status, setStatus] = useState<"idle" | "processing" | "success" | "failed">("idle");
   const [pendingTopup, setPendingTopup] = useState<{ topup_id: string; reference_id?: string; status?: "PENDING" | "COMPLETED" | "FAILED" } | null>(null);
   const [mobileNumber, setMobileNumber] = useState("");
-  const [bankName, setBankName] = useState("Dutch-Bangla Bank");
+  const [bankName, setBankName] = useState("AB Bank");
   const [bankNameOther, setBankNameOther] = useState("");
   const [bankAccountNo, setBankAccountNo] = useState("");
   const [accountHolderName, setAccountHolderName] = useState("");
@@ -195,7 +218,7 @@ export default function WalletPage() {
     setErr(null);
     setPendingTopup(null);
     setMobileNumber("");
-    setBankName("Dutch-Bangla Bank");
+    setBankName("AB Bank");
     setBankNameOther("");
     setBankAccountNo("");
     setAccountHolderName("");
@@ -250,9 +273,9 @@ export default function WalletPage() {
       </div>
 
       {showAddMoney && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 p-4">
-          <div className="w-full max-w-xl rounded-2xl border border-zinc-200 bg-white p-5 dark:border-zinc-900 dark:bg-zinc-950">
-            <div className="flex items-center justify-between">
+        <div className="fixed inset-0 z-50 flex items-start justify-center overflow-y-auto bg-black/50 p-3 sm:items-center sm:p-4">
+          <div className="my-3 flex max-h-[92vh] w-full max-w-xl flex-col rounded-2xl border border-zinc-200 bg-white p-4 sm:p-5 dark:border-zinc-900 dark:bg-zinc-950">
+            <div className="flex shrink-0 items-center justify-between">
               <h2 className="text-lg font-semibold text-zinc-900 dark:text-zinc-100">Add Money</h2>
               <button
                 onClick={resetAddMoney}
@@ -262,8 +285,9 @@ export default function WalletPage() {
               </button>
             </div>
 
+            <div className="mt-4 overflow-y-auto pr-1">
             {step === 1 && (
-              <form onSubmit={onContinue} className="mt-4">
+              <form onSubmit={onContinue}>
                 <label className="text-sm text-zinc-700 dark:text-zinc-300">
                   Amount (BDT)
                   <input
@@ -303,7 +327,7 @@ export default function WalletPage() {
             )}
 
             {step === 2 && (
-              <div className="mt-4">
+              <div>
                 <div className="text-sm text-zinc-700 dark:text-zinc-300">Select Payment Method</div>
                 <div className="mt-3 grid grid-cols-1 gap-2 sm:grid-cols-3">
                   {[
@@ -386,10 +410,7 @@ export default function WalletPage() {
                           onChange={(e) => setBankName(e.target.value)}
                           className="mt-1 w-full rounded-lg border border-zinc-300 bg-white px-3 py-2 text-sm text-zinc-900 outline-none focus:border-zinc-500 dark:border-zinc-700 dark:bg-zinc-950 dark:text-zinc-100 dark:focus:border-zinc-600"
                         >
-                          <option>Dutch-Bangla Bank</option>
-                          <option>BRAC Bank</option>
-                          <option>Islami Bank</option>
-                          <option>City Bank</option>
+                          <option>AB Bank</option>
                           <option>Other</option>
                         </select>
                       </label>
@@ -484,7 +505,7 @@ export default function WalletPage() {
             )}
 
             {step === 3 && (
-              <div className="mt-4">
+              <div>
                 {status === "processing" && (
                   <div className="rounded-xl border border-blue-300 bg-blue-50 px-3 py-3 text-sm text-blue-800 dark:border-blue-900 dark:bg-blue-950/40 dark:text-blue-200">
                     Processing payment. Do not close this window. If payment is completed, balance updates automatically within 10–30 seconds.
@@ -527,6 +548,7 @@ export default function WalletPage() {
                 </div>
               </div>
             )}
+            </div>
           </div>
         </div>
       )}

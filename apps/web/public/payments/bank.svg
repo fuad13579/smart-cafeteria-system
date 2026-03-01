@@ -1,0 +1,9 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="96" height="96" viewBox="0 0 96 96" role="img" aria-label="Bank logo">
+  <rect width="96" height="96" rx="18" fill="#0F4C5C"/>
+  <polygon points="12,34 48,12 84,34" fill="#FFFFFF"/>
+  <rect x="16" y="36" width="8" height="24" fill="#FFFFFF"/>
+  <rect x="34" y="36" width="8" height="24" fill="#FFFFFF"/>
+  <rect x="52" y="36" width="8" height="24" fill="#FFFFFF"/>
+  <rect x="70" y="36" width="8" height="24" fill="#FFFFFF"/>
+  <rect x="12" y="64" width="72" height="8" fill="#FFFFFF"/>
+</svg>
