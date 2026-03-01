@@ -4,6 +4,7 @@ import { useEffect, useState } from "react";
 import Link from "next/link";
 import { useParams } from "next/navigation";
 import { getMyOrders, getOrder, type OrderStatus } from "@/lib/api";
+import { getToken } from "@/lib/storage";
 
 const steps: OrderStatus[] = [
   "QUEUED",
@@ -13,6 +14,8 @@ const steps: OrderStatus[] = [
   "CANCELLED",
 ];
 const terminalStates: OrderStatus[] = ["READY", "COMPLETED", "CANCELLED"];
+const NOTIFICATION_WS_URL =
+  process.env.NEXT_PUBLIC_NOTIFICATION_WS_URL || "ws://localhost:8005/ws";
 
 function Step({ label, active }: { label: string; active: boolean }) {
   return (
@@ -67,6 +70,57 @@ export default function OrderPage() {
     return () => {
       cancelled = true;
       if (pollRef) clearInterval(pollRef);
+    };
+  }, [orderId, status]);
+
+  useEffect(() => {
+    if (!orderId) return;
+    if (process.env.NEXT_PUBLIC_API_MODE !== "real") return;
+    if (terminalStates.includes(status)) return;
+    const token = getToken();
+    if (!token) return;
+
+    let socket: WebSocket | null = null;
+    let reconnectTimer: ReturnType<typeof setTimeout> | null = null;
+    let closed = false;
+
+    const connect = () => {
+      if (closed) return;
+      const url = `${NOTIFICATION_WS_URL}?token=${encodeURIComponent(token)}`;
+      socket = new WebSocket(url);
+
+      socket.onmessage = (event) => {
+        try {
+          const payload = JSON.parse(event.data);
+          if (payload?.order_id !== orderId) return;
+          const nextStatus = payload?.to_status as OrderStatus | undefined;
+          if (!nextStatus) return;
+          setStatus(nextStatus);
+          if (typeof payload?.eta_minutes === "number") {
+            setEta(Math.max(0, payload.eta_minutes));
+          }
+          setErr(null);
+        } catch {
+          // ignore malformed websocket events
+        }
+      };
+
+      socket.onerror = () => {
+        socket?.close();
+      };
+
+      socket.onclose = () => {
+        if (closed) return;
+        reconnectTimer = setTimeout(connect, 3000);
+      };
+    };
+
+    connect();
+
+    return () => {
+      closed = true;
+      if (reconnectTimer) clearTimeout(reconnectTimer);
+      if (socket) socket.close();
     };
   }, [orderId, status]);
 

@@ -1,6 +1,7 @@
 import React, { useEffect, useMemo, useState } from "react";
 import { View, Text, Pressable } from "react-native";
 import { NativeStackScreenProps } from "@react-navigation/native-stack";
+import * as SecureStore from "expo-secure-store";
 import { RootStackParamList } from "../../App";
 import StatusTimeline from "../components/StatusTimeline";
 import { apiGetOrder, type OrderStatus } from "../lib/api";
@@ -9,6 +10,8 @@ type Props = NativeStackScreenProps<RootStackParamList, "Order">;
 
 const steps: OrderStatus[] = ["QUEUED", "IN_PROGRESS", "READY", "COMPLETED", "CANCELLED"];
 const terminalStates: OrderStatus[] = ["READY", "COMPLETED", "CANCELLED"];
+const NOTIFICATION_WS_URL =
+  process.env.EXPO_PUBLIC_NOTIFICATION_WS_URL || "ws://localhost:8005/ws";
 
 export default function OrderScreen({ route, navigation }: Props) {
   const { id } = route.params;
@@ -50,6 +53,59 @@ export default function OrderScreen({ route, navigation }: Props) {
     return () => {
       disposed = true;
       if (pollRef) clearInterval(pollRef);
+    };
+  }, [id, status]);
+
+  useEffect(() => {
+    if (process.env.EXPO_PUBLIC_API_MODE !== "real") return;
+    if (terminalStates.includes(status)) return;
+
+    let socket: WebSocket | null = null;
+    let reconnectTimer: ReturnType<typeof setTimeout> | null = null;
+    let disposed = false;
+
+    const connect = async () => {
+      if (disposed) return;
+      const token = await SecureStore.getItemAsync("sc_token");
+      if (!token) return;
+
+      const url = `${NOTIFICATION_WS_URL}?token=${encodeURIComponent(token)}`;
+      socket = new WebSocket(url);
+
+      socket.onmessage = (event) => {
+        try {
+          const payload = JSON.parse(event.data);
+          if (payload?.order_id !== id) return;
+          const nextStatus = payload?.to_status as OrderStatus | undefined;
+          if (!nextStatus) return;
+          setStatus(nextStatus);
+          if (typeof payload?.eta_minutes === "number") {
+            setEta(Math.max(0, payload.eta_minutes));
+          }
+          setErr(null);
+        } catch {
+          // ignore malformed websocket events
+        }
+      };
+
+      socket.onerror = () => {
+        socket?.close();
+      };
+
+      socket.onclose = () => {
+        if (disposed) return;
+        reconnectTimer = setTimeout(() => {
+          void connect();
+        }, 3000);
+      };
+    };
+
+    void connect();
+
+    return () => {
+      disposed = true;
+      if (reconnectTimer) clearTimeout(reconnectTimer);
+      if (socket) socket.close();
     };
   }, [id, status]);
 

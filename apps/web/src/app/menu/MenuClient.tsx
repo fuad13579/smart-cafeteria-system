@@ -179,7 +179,7 @@ export default function MenuClient() {
       {loading && <div className="mt-6 text-sm text-zinc-600 dark:text-zinc-400">Loading menu...</div>}
       {err && <div className="mt-6 rounded-xl border border-red-300 bg-red-50 px-3 py-2 text-sm text-red-700 dark:border-red-900 dark:bg-red-950/40 dark:text-red-200">{err}</div>}
 
-      <div className="mt-6 grid grid-cols-1 gap-3 sm:grid-cols-2">
+      <div className="mt-6 grid grid-cols-1 gap-3">
         {filtered.map((item) => {
           const stock = item.stock_quantity ?? 0;
           const availability = !item.available ? "sold_out" : stock <= 5 ? "low" : "available";
@@ -192,8 +192,7 @@ export default function MenuClient() {
 
           return (
             <div key={item.id} className="rounded-2xl border border-zinc-200 bg-zinc-50 p-4 dark:border-zinc-900 dark:bg-zinc-950">
-              <div className="h-28 rounded-xl bg-gradient-to-br from-zinc-100 to-zinc-200 dark:from-zinc-900 dark:to-zinc-800" />
-              <div className="mt-3 flex items-start justify-between gap-3">
+              <div className="flex items-start justify-between gap-3">
                 <div>
                   <div className="text-sm font-medium text-zinc-900 dark:text-white">{item.name}</div>
                   <div className="mt-1 text-xs text-zinc-600 dark:text-zinc-500">BDT {item.price}</div>
