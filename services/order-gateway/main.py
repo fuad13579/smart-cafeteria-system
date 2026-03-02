@@ -272,6 +272,13 @@ class LoginRequest(BaseModel):
     password: str
 
 
+class RegisterRequest(BaseModel):
+    full_name: str
+    student_id: str
+    email: str
+    password: str
+
+
 class OrderLine(BaseModel):
     id: str
     qty: int = Field(gt=0)
@@ -1985,6 +1992,41 @@ def login(payload: LoginRequest, response: Response):
 @app.post("/api/auth/login")
 def auth_login(payload: LoginRequest, response: Response):
     return login(payload, response)
+
+
+@app.post("/api/auth/register")
+def auth_register(payload: RegisterRequest, response: Response):
+    _should_fail()
+    metrics["login_proxy_total"] += 1
+    url = f"{_identity_url()}/register"
+    data = json.dumps(payload.model_dump()).encode("utf-8")
+
+    try:
+        with httpx.Client(timeout=5) as client:
+            resp = client.post(url, content=data, headers={"Content-Type": "application/json"})
+            if resp.status_code >= 400:
+                detail = (
+                    resp.json().get("detail")
+                    if resp.headers.get("content-type", "").startswith("application/json")
+                    else "Registration failed"
+                )
+                return JSONResponse(status_code=resp.status_code, content={"message": detail or "Registration failed"})
+
+            body = resp.json()
+            token = body.get("access_token")
+            if isinstance(token, str) and token:
+                response.set_cookie(
+                    key=ACCESS_COOKIE_NAME,
+                    value=token,
+                    httponly=True,
+                    samesite="lax",
+                    secure=_cookie_secure(),
+                    max_age=_jwt_exp_minutes() * 60,
+                    path="/",
+                )
+            return body
+    except Exception as exc:
+        return JSONResponse(status_code=503, content={"message": f"Identity service unavailable: {exc}"})
 
 
 @app.post("/api/refresh")

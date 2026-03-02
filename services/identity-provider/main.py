@@ -33,6 +33,13 @@ class LoginRequest(BaseModel):
     password: str
 
 
+class RegisterRequest(BaseModel):
+    full_name: str
+    student_id: str
+    email: str
+    password: str
+
+
 class ChaosRequest(BaseModel):
     enabled: bool
     mode: str = "error"
@@ -51,7 +58,7 @@ def _fetch_user(student_id: str) -> dict | None:
         with conn.cursor() as cur:
             cur.execute(
                 """
-                SELECT student_id, full_name, account_balance
+                SELECT student_id, full_name, email, account_balance
                 FROM students
                 WHERE student_id = %s AND is_active = TRUE
                 """,
@@ -64,9 +71,17 @@ def _fetch_user(student_id: str) -> dict | None:
                 "id": row[0],
                 "student_id": row[0],
                 "name": row[1],
-                "account_balance": row[2],
+                "email": row[2],
+                "account_balance": row[3],
                 "role": _resolve_role(row[0]),
             }
+
+
+def _ensure_students_schema() -> None:
+    with _db_conn() as conn:
+        with conn.cursor() as cur:
+            cur.execute("ALTER TABLE students ADD COLUMN IF NOT EXISTS email TEXT")
+            conn.commit()
 
 
 def _jwt_secret() -> str:
@@ -164,6 +179,54 @@ def login(payload: LoginRequest):
     }
 
 
+@app.post("/register")
+def register(payload: RegisterRequest):
+    _should_fail()
+    full_name = payload.full_name.strip()
+    student_id = payload.student_id.strip()
+    email = payload.email.strip().lower()
+    password = payload.password
+
+    if not full_name:
+        raise HTTPException(status_code=422, detail="Full name is required")
+    if not student_id:
+        raise HTTPException(status_code=422, detail="Student ID is required")
+    if not email or "@" not in email:
+        raise HTTPException(status_code=422, detail="Valid email is required")
+    if len(password) < 6:
+        raise HTTPException(status_code=422, detail="Password must be at least 6 characters")
+
+    with _db_conn() as conn:
+        with conn.cursor() as cur:
+            cur.execute("SELECT 1 FROM students WHERE student_id = %s", (student_id,))
+            if cur.fetchone():
+                raise HTTPException(status_code=409, detail="Student ID already exists")
+
+            cur.execute("SELECT 1 FROM students WHERE email = %s", (email,))
+            if cur.fetchone():
+                raise HTTPException(status_code=409, detail="Email already exists")
+
+            cur.execute(
+                """
+                INSERT INTO students(student_id, full_name, email, password, account_balance, is_active)
+                VALUES (%s, %s, %s, %s, 0, TRUE)
+                """,
+                (student_id, full_name, email, password),
+            )
+            token = _create_access_token(student_id)
+            cur.execute(
+                "INSERT INTO auth_tokens(token, student_id) VALUES (%s, %s)",
+                (token, student_id),
+            )
+            conn.commit()
+
+    user = _fetch_user(student_id)
+    if not user:
+        raise HTTPException(status_code=500, detail="Failed to create user")
+
+    return {"access_token": token, "user": user}
+
+
 @app.get("/metrics")
 def get_metrics():
     return {
@@ -255,3 +318,8 @@ def chaos_fail(payload: ChaosRequest):
     chaos_state["enabled"] = payload.enabled
     chaos_state["mode"] = payload.mode if payload.mode in {"error", "timeout"} else "error"
     return {"status": "ok", "chaos": chaos_state}
+
+
+@app.on_event("startup")
+def on_startup():
+    _ensure_students_schema()

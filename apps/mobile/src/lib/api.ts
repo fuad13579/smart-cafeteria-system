@@ -53,6 +53,17 @@ export type WalletTx = {
   created_at?: string;
 };
 export type WalletTxResp = { transactions: WalletTx[] };
+export type RegisterResp = {
+  access_token: string;
+  user: {
+    student_id: string;
+    id?: string;
+    name: string;
+    email?: string;
+    account_balance?: number;
+    role?: string;
+  };
+};
 
 function sleep(ms: number) {
   return new Promise((r) => setTimeout(r, ms));
@@ -128,6 +139,13 @@ async function getAuthHeaders(): Promise<Record<string, string>> {
 let mockAccountBalance = 1250;
 let mockOrders: OrderDetails[] = [];
 let mockTx: WalletTx[] = [];
+const mockUsers = new Map<string, { name: string; email: string; password: string; account_balance: number }>();
+mockUsers.set("admin-demo", {
+  name: "Demo Admin",
+  email: "admin@iut.local",
+  password: "admin-pass",
+  account_balance: 5000,
+});
 
 export async function apiLogin(student_id: string, _password: string) {
   if (API_MODE === "mock") {
@@ -135,7 +153,15 @@ export async function apiLogin(student_id: string, _password: string) {
     if (API_MOCK_SCENARIO !== "success") {
       throw buildMockError("/login");
     }
-    return { access_token: "mock-token", user: { student_id, name: "Mock User", account_balance: mockAccountBalance } };
+    const entry = mockUsers.get(student_id);
+    if (!entry || entry.password !== _password) {
+      throw new Error("Invalid student ID or password");
+    }
+    mockAccountBalance = entry.account_balance;
+    return {
+      access_token: "mock-token",
+      user: { student_id, name: entry.name, email: entry.email, account_balance: entry.account_balance },
+    };
   }
   const res = await fetch(resolveUrl("/login"), {
     method: "POST",
@@ -143,6 +169,61 @@ export async function apiLogin(student_id: string, _password: string) {
     body: JSON.stringify({ student_id, password: _password }),
   });
   if (!res.ok) throw new Error("Login failed");
+  return res.json();
+}
+
+export async function apiRegister(
+  payload: { full_name: string; student_id: string; email: string; password: string }
+): Promise<RegisterResp> {
+  if (API_MODE === "mock") {
+    await sleep(API_MOCK_DELAY_MS);
+    if (API_MOCK_SCENARIO !== "success") {
+      throw buildMockError("/auth/register");
+    }
+    const fullName = payload.full_name.trim();
+    const studentId = payload.student_id.trim();
+    const email = payload.email.trim().toLowerCase();
+    const password = payload.password;
+
+    if (!fullName) throw new Error("Full name is required");
+    if (!studentId) throw new Error("Student ID is required");
+    if (!email || !email.includes("@")) throw new Error("Valid email is required");
+    if (password.length < 6) throw new Error("Password must be at least 6 characters");
+    if (mockUsers.has(studentId)) throw new Error("Student ID already exists");
+
+    for (const existing of mockUsers.values()) {
+      if (existing.email.toLowerCase() === email) {
+        throw new Error("Email already exists");
+      }
+    }
+
+    mockUsers.set(studentId, {
+      name: fullName,
+      email,
+      password,
+      account_balance: 0,
+    });
+
+    return {
+      access_token: "mock-token",
+      user: {
+        student_id: studentId,
+        name: fullName,
+        email,
+        account_balance: 0,
+      },
+    };
+  }
+
+  const res = await fetch(resolveUrl("/auth/register"), {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(payload),
+  });
+  if (!res.ok) {
+    const err = await res.json().catch(() => ({}));
+    throw new Error(parseApiErrorMessage(err, "Registration failed"));
+  }
   return res.json();
 }
 
