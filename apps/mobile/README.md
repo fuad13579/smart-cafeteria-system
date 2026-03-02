@@ -1,50 +1,74 @@
-# Welcome to your Expo app 👋
+# Mobile App (Expo) - APK Build Guide
 
-This is an [Expo](https://expo.dev) project created with [`create-expo-app`](https://www.npmjs.com/package/create-expo-app).
-
-## Get started
-
-1. Install dependencies
-
-   ```bash
-   npm install
-   ```
-
-2. Start the app
-
-   ```bash
-   npx expo start
-   ```
-
-In the output, you'll find options to open the app in a
-
-- [development build](https://docs.expo.dev/develop/development-builds/introduction/)
-- [Android emulator](https://docs.expo.dev/workflow/android-studio-emulator/)
-- [iOS simulator](https://docs.expo.dev/workflow/ios-simulator/)
-- [Expo Go](https://expo.dev/go), a limited sandbox for trying out app development with Expo
-
-You can start developing by editing the files inside the **app** directory. This project uses [file-based routing](https://docs.expo.dev/router/introduction).
-
-## Get a fresh project
-
-When you're ready, run:
+## 1) Install dependencies
 
 ```bash
-npm run reset-project
+cd apps/mobile
+npm install
 ```
 
-This command will move the starter code to the **app-example** directory and create a blank **app** directory where you can start developing.
+## 2) Install EAS CLI and login
 
-## Learn more
+```bash
+npm i -g eas-cli
+eas login
+```
 
-To learn more about developing your project with Expo, look at the following resources:
+## 3) EAS config
 
-- [Expo documentation](https://docs.expo.dev/): Learn fundamentals, or go into advanced topics with our [guides](https://docs.expo.dev/guides).
-- [Learn Expo tutorial](https://docs.expo.dev/tutorial/introduction/): Follow a step-by-step tutorial where you'll create a project that runs on Android, iOS, and the web.
+This project already includes `eas.json` with:
+- `preview` profile for APK output (`android.buildType = "apk"`)
+- default mock-mode env for demo builds
 
-## Join the community
+If you want to regenerate from scratch:
 
-Join our community of developers creating universal apps.
+```bash
+eas build:configure
+```
 
-- [Expo on GitHub](https://github.com/expo/expo): View our open source platform and contribute.
-- [Discord community](https://chat.expo.dev): Chat with Expo users and ask questions.
+Then keep this in `eas.json`:
+
+```json
+{
+  "build": {
+    "preview": {
+      "distribution": "internal",
+      "android": { "buildType": "apk" }
+    }
+  }
+}
+```
+
+## 4) Build APK (recommended for demo install)
+
+```bash
+eas build --platform android --profile preview
+```
+
+EAS will provide a build URL to download the APK.
+
+## 5) Install on Android phones
+
+1. Open the EAS build URL on Android.
+2. Download APK.
+3. Allow "Install unknown apps" if prompted.
+4. Install and run.
+
+## 6) Optional: set EAS env vars for preview builds
+
+```bash
+eas env:create --name EXPO_PUBLIC_API_MODE --value mock --environment preview --visibility plaintext
+eas env:create --name EXPO_PUBLIC_API_BASE_URL --value http://localhost:8002 --environment preview --visibility plaintext
+eas env:create --name EXPO_PUBLIC_API_PREFIX --value /api --environment preview --visibility plaintext
+eas env:create --name EXPO_PUBLIC_API_MOCK_SCENARIO --value success --environment preview --visibility plaintext
+eas env:create --name EXPO_PUBLIC_API_MOCK_DELAY_MS --value 350 --environment preview --visibility plaintext
+eas env:create --name EXPO_PUBLIC_NOTIFICATION_WS_URL --value ws://localhost:8005/ws --environment preview --visibility plaintext
+```
+
+## 7) Notes
+
+- Current default is **Demo Mode** (`mock`), suitable for hackathon frontend demos.
+- For real backend integration later, switch to:
+  - `EXPO_PUBLIC_API_MODE=real`
+  - `EXPO_PUBLIC_API_BASE_URL=https://<your-api-domain>`
+  - `EXPO_PUBLIC_NOTIFICATION_WS_URL=wss://<your-api-domain>/ws`

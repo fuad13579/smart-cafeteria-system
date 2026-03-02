@@ -181,18 +181,16 @@ export async function apiCreateOrder(items: { id: string; qty: number }[]): Prom
     }
     const order_id = String(Date.now());
     const total_amount = items.reduce((acc, cur) => acc + cur.qty * (cur.id === "2" ? 280 : 220), 0);
-    mockOrders = [
-      {
-        order_id,
-        token_no: Number(order_id.slice(-4)) || 1001,
-        pickup_counter: 1,
-        status: "QUEUED",
-        eta_minutes: 12,
-        total_amount,
-        created_at: new Date().toISOString(),
-      },
-      ...mockOrders,
-    ].slice(0, 50);
+    const order: OrderDetails = {
+      order_id,
+      token_no: Number(order_id.slice(-4)) || 1001,
+      pickup_counter: 1,
+      status: "QUEUED",
+      eta_minutes: 12,
+      total_amount,
+      created_at: new Date().toISOString(),
+    };
+    mockOrders = [order, ...mockOrders].slice(0, 50);
     return { order_id, status: "QUEUED", eta_minutes: 12 };
   }
   const auth = await getAuthHeaders();
@@ -271,17 +269,15 @@ export async function apiWalletTopup(amount: number, method: WalletMethod): Prom
     if (completed) {
       mockAccountBalance += amount;
     }
-    mockTx = [
-      {
-        transaction_id: topup_id,
-        topup_id,
-        method,
-        amount,
-        status: completed ? "Success" : "Pending",
-        created_at: new Date().toISOString(),
-      },
-      ...mockTx,
-    ].slice(0, 100);
+    const transaction: WalletTx = {
+      transaction_id: topup_id,
+      topup_id,
+      method,
+      amount,
+      status: completed ? "Success" : "Pending",
+      created_at: new Date().toISOString(),
+    };
+    mockTx = [transaction, ...mockTx].slice(0, 100);
     return {
       ok: true,
       account_balance: mockAccountBalance,
