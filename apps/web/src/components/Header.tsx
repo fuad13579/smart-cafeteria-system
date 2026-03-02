@@ -27,6 +27,7 @@ function NavLink({ href, label }: { href: string; label: string }) {
 }
 
 export function Header() {
+  const isDemoMode = process.env.NEXT_PUBLIC_API_MODE !== "real";
   const [cartCount, setCartCount] = useState(0);
   const [currentUser, setCurrentUser] = useState<User | null>(null);
   const [mounted, setMounted] = useState(false);
@@ -60,6 +61,11 @@ export function Header() {
 
   return (
     <header className="sticky top-0 z-10 border-b border-zinc-200 bg-white/80 backdrop-blur dark:border-zinc-900 dark:bg-zinc-950/80">
+      {isDemoMode && (
+        <div className="border-b border-amber-200 bg-amber-50 px-4 py-1 text-center text-xs font-medium text-amber-800 dark:border-amber-900/60 dark:bg-amber-950/40 dark:text-amber-200">
+          Demo Mode (Backend not connected)
+        </div>
+      )}
       <div className="mx-auto flex max-w-4xl items-center justify-between px-4 py-3">
         <Link href="/menu" className="flex items-center gap-2">
           <Image src="/iut-logo.png" alt="IUT logo" width={36} height={36} className="rounded-md object-contain" />

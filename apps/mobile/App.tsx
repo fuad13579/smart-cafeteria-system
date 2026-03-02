@@ -1,6 +1,6 @@
 import "react-native-gesture-handler";
 import React, { useEffect, useState } from "react";
-import { AppState } from "react-native";
+import { AppState, StyleSheet, Text, View } from "react-native";
 import { NavigationContainer, DefaultTheme } from "@react-navigation/native";
 import { createNativeStackNavigator } from "@react-navigation/native-stack";
 import * as SecureStore from "expo-secure-store";
@@ -33,6 +33,7 @@ const theme = {
 };
 
 export default function App() {
+  const isDemoMode = process.env.EXPO_PUBLIC_API_MODE !== "real";
   const [booting, setBooting] = useState(true);
   const [hasToken, setHasToken] = useState(false);
 
@@ -63,6 +64,11 @@ export default function App() {
   return (
     <NavigationContainer theme={theme}>
       <React.Fragment>
+        {isDemoMode && (
+          <View style={styles.demoBanner} pointerEvents="none">
+            <Text style={styles.demoBannerText}>Demo Mode (Backend not connected)</Text>
+          </View>
+        )}
         <Stack.Navigator
           initialRouteName={hasToken ? "Menu" : "Login"}
           screenOptions={{
@@ -82,3 +88,19 @@ export default function App() {
     </NavigationContainer>
   );
 }
+
+const styles = StyleSheet.create({
+  demoBanner: {
+    backgroundColor: "#fef3c7",
+    borderBottomWidth: 1,
+    borderBottomColor: "#f59e0b",
+    paddingVertical: 6,
+    paddingHorizontal: 12,
+  },
+  demoBannerText: {
+    color: "#92400e",
+    textAlign: "center",
+    fontSize: 12,
+    fontWeight: "600",
+  },
+});
