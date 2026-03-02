@@ -1,7 +1,6 @@
 # Smart Cafeteria Deploy Checklist
 
-Domain: `iut-smart-cafeteria.linkpc.net`  
-API base: `https://iut-smart-cafeteria.linkpc.net`
+Domain (example): `api.103.182.213.241.nip.io`
 
 ## 1) Push Latest Code
 
@@ -54,24 +53,54 @@ Expected:
 - `/admin/metrics` returns latency/orders/queue JSON.
 - `/api/menu` returns menu payload.
 
-## 5) Frontend Runtime Env (Real Mode)
+## 5) Frontend Runtime Env
+
+Important:
+- `apps/web/.env.example` is ignored in this repo, so teammates must copy envs manually.
+- Current frontend deployment mode is `mock` unless you explicitly switch to `real`.
+
+### A) Frontend-only deploy (recommended for now, mock mode)
+
+Web (`apps/web/.env.local`):
+
+```env
+NEXT_PUBLIC_API_MODE=mock
+NEXT_PUBLIC_API_BASE_URL=http://localhost:8002
+NEXT_PUBLIC_API_PREFIX=/api
+NEXT_PUBLIC_API_MOCK_SCENARIO=success
+NEXT_PUBLIC_API_MOCK_DELAY_MS=350
+NEXT_PUBLIC_NOTIFICATION_WS_URL=ws://localhost:8005/ws
+```
+
+Mobile (`apps/mobile/.env`):
+
+```env
+EXPO_PUBLIC_API_MODE=mock
+EXPO_PUBLIC_API_BASE_URL=http://localhost:8002
+EXPO_PUBLIC_API_PREFIX=/api
+EXPO_PUBLIC_API_MOCK_SCENARIO=success
+EXPO_PUBLIC_API_MOCK_DELAY_MS=350
+EXPO_PUBLIC_NOTIFICATION_WS_URL=ws://localhost:8005/ws
+```
+
+### B) Full-stack deploy (real backend mode)
 
 Web (`apps/web/.env.local`):
 
 ```env
 NEXT_PUBLIC_API_MODE=real
-NEXT_PUBLIC_API_BASE_URL=https://iut-smart-cafeteria.linkpc.net
+NEXT_PUBLIC_API_BASE_URL=https://api.103.182.213.241.nip.io
 NEXT_PUBLIC_API_PREFIX=/api
-NEXT_PUBLIC_NOTIFICATION_WS_URL=wss://iut-smart-cafeteria.linkpc.net/ws
+NEXT_PUBLIC_NOTIFICATION_WS_URL=wss://api.103.182.213.241.nip.io/ws
 ```
 
 Mobile (`apps/mobile/.env`):
 
 ```env
 EXPO_PUBLIC_API_MODE=real
-EXPO_PUBLIC_API_BASE_URL=https://iut-smart-cafeteria.linkpc.net
+EXPO_PUBLIC_API_BASE_URL=https://api.103.182.213.241.nip.io
 EXPO_PUBLIC_API_PREFIX=/api
-EXPO_PUBLIC_NOTIFICATION_WS_URL=wss://iut-smart-cafeteria.linkpc.net/ws
+EXPO_PUBLIC_NOTIFICATION_WS_URL=wss://api.103.182.213.241.nip.io/ws
 ```
 
 Restart apps after env changes.
@@ -108,6 +137,6 @@ docker compose -f infra/docker-compose.yml logs --tail=200 notification-hub
 
 Deploy is ready when all are true:
 - `docker compose up -d --build` succeeds on fresh pull.
-- `/admin/health` and `/admin/metrics` work on domain.
+- `/admin/health` and `/admin/metrics` work on API domain.
 - Login -> order -> tracking -> kitchen flow works.
-- Web/mobile both hit `https://iut-smart-cafeteria.linkpc.net` in real mode.
+- Web/mobile hit the intended API base URL for selected mode (`mock` or `real`).
