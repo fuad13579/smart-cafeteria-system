@@ -5,6 +5,45 @@ import { useEffect, useState } from "react";
 import { deleteOrder, getMyOrders, getOrderSlipUrl, markOrderSlipPrinted, type OrderDetails } from "@/lib/api";
 import { useToast } from "@/components/ToastProvider";
 
+function buildMockSlipHtml(input: {
+  orderId: string;
+  tokenNo: number | null;
+  pickupCounter: number | null;
+  status: string;
+  eta: number;
+}) {
+  const now = new Date().toLocaleString();
+  const token = input.tokenNo ?? "-";
+  const counter = input.pickupCounter ?? 1;
+  return `<!doctype html>
+<html>
+  <head>
+    <meta charset="utf-8" />
+    <title>Order Slip</title>
+    <style>
+      @media print { @page { size: A6; margin: 8mm; } }
+      body { font-family: Arial, sans-serif; margin: 0; padding: 12px; color: #111; }
+      .box { border: 1px solid #111; border-radius: 8px; padding: 12px; }
+      .token { font-size: 36px; font-weight: 700; text-align: center; margin: 8px 0 10px; }
+      .row { margin: 4px 0; font-size: 12px; }
+      .muted { color: #555; }
+    </style>
+  </head>
+  <body>
+    <div class="box">
+      <div class="muted">Smart Cafeteria - Demo Slip</div>
+      <div class="token">TOKEN #${token}</div>
+      <div class="row"><strong>Order:</strong> ${input.orderId}</div>
+      <div class="row"><strong>Counter:</strong> ${counter}</div>
+      <div class="row"><strong>Status:</strong> ${input.status}</div>
+      <div class="row"><strong>ETA:</strong> ${input.eta} min</div>
+      <div class="row"><strong>Printed:</strong> ${now}</div>
+    </div>
+    <script>window.print()</script>
+  </body>
+</html>`;
+}
+
 export default function OrdersPage() {
   const { showToast } = useToast();
   const [orders, setOrders] = useState<OrderDetails[]>([]);
@@ -74,10 +113,35 @@ export default function OrdersPage() {
     }
   };
 
-  const onPrintSlip = async (orderId: string) => {
-    window.open(getOrderSlipUrl(orderId, true), "_blank", "noopener,noreferrer");
+  const onPrintSlip = async (order: OrderDetails) => {
+    if (process.env.NEXT_PUBLIC_API_MODE !== "real") {
+      const w = window.open("", "_blank", "noopener,noreferrer");
+      if (!w) {
+        showToast("Popup blocked by browser", "error");
+        return;
+      }
+      w.document.open();
+      w.document.write(
+        buildMockSlipHtml({
+          orderId: order.order_id,
+          tokenNo: typeof order.token_no === "number" ? order.token_no : null,
+          pickupCounter: typeof order.pickup_counter === "number" ? order.pickup_counter : null,
+          status: order.status,
+          eta: Math.max(0, order.eta_minutes ?? 0),
+        })
+      );
+      w.document.close();
+      return;
+    }
+
+    const popup = window.open(getOrderSlipUrl(order.order_id, true), "_blank", "noopener,noreferrer");
+    if (!popup) {
+      showToast("Popup blocked by browser", "error");
+      return;
+    }
+
     try {
-      await markOrderSlipPrinted(orderId);
+      await markOrderSlipPrinted(order.order_id);
     } catch {
       // non-blocking metadata update
     }
@@ -138,7 +202,7 @@ export default function OrdersPage() {
               <div className="flex items-center gap-2">
                 <div className="rounded-full bg-zinc-200 px-3 py-1 text-xs dark:bg-zinc-800">{o.status}</div>
                 <button
-                  onClick={() => onPrintSlip(o.order_id)}
+                  onClick={() => onPrintSlip(o)}
                   className="rounded-lg border border-zinc-300 px-2 py-1 text-xs text-zinc-700 hover:bg-zinc-100 dark:border-zinc-700 dark:text-zinc-300 dark:hover:bg-zinc-900"
                 >
                   Print token
