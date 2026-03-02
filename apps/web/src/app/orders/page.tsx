@@ -21,7 +21,7 @@ export default function OrdersPage() {
         const res = await getMyOrders();
         if (cancelled) return;
         setErr(null);
-        setOrders(res.orders);
+        setOrders(Array.isArray(res?.orders) ? res.orders : []);
       } catch (e: any) {
         if (cancelled) return;
         setErr(e?.message ?? "Failed to load your orders");

@@ -144,6 +144,7 @@ export interface WalletTopupResponse {
 }
 
 let mockAccountBalance = 1250;
+let mockAuthUser: LoginResponse["user"] | null = null;
 type MockTopup = {
   topup_id: string;
   amount: number;
@@ -215,26 +216,44 @@ async function makeMockRequest<T>(
   if (method === "POST" && endpoint === "/auth/login") {
     const studentId = body?.student_id || "2100000";
     const role = studentId === "admin-demo" ? "admin" : "student";
+    const user = {
+      name: "Mock User",
+      id: studentId,
+      student_id: studentId,
+      account_balance: mockAccountBalance,
+      role,
+    };
+    mockAuthUser = user;
     return {
       access_token: "mock-token",
-      user: {
-        name: "Mock User",
-        id: studentId,
-        student_id: studentId,
-        account_balance: mockAccountBalance,
-        role,
-      },
+      user,
     } as T;
   }
 
   if (method === "GET" && endpoint === "/auth/me") {
+    const storageUser =
+      typeof window !== "undefined"
+        ? (() => {
+            try {
+              const raw = localStorage.getItem("cafeteria:user");
+              return raw ? JSON.parse(raw) : null;
+            } catch {
+              return null;
+            }
+          })()
+        : null;
+    const user = mockAuthUser ?? storageUser;
+    if (!user) {
+      throw new Error("Missing or invalid token");
+    }
     return {
       user: {
-        name: "Mock User",
-        id: "2100000",
-        student_id: "2100000",
-        account_balance: mockAccountBalance,
-        role: "student",
+        ...user,
+        account_balance:
+          typeof user.account_balance === "number"
+            ? user.account_balance
+            : mockAccountBalance,
+        role: user.role || "student",
       },
     } as T;
   }
@@ -345,6 +364,7 @@ async function makeMockRequest<T>(
   }
 
   if (method === "POST" && endpoint === "/auth/logout") {
+    mockAuthUser = null;
     return { ok: true } as T;
   }
 
@@ -391,11 +411,6 @@ async function makeMockRequest<T>(
     } as T;
   }
 
-  if (method === "GET" && endpoint.startsWith("/orders/")) {
-    const orderId = endpoint.split("/").pop() || String(Date.now());
-    return mockOrderFromId(orderId) as T;
-  }
-
   if (method === "GET" && endpoint === "/orders/me") {
     const now = Date.now();
     return {
@@ -413,6 +428,11 @@ async function makeMockRequest<T>(
         },
       ],
     } as T;
+  }
+
+  if (method === "GET" && endpoint.startsWith("/orders/")) {
+    const orderId = endpoint.split("/").pop() || String(Date.now());
+    return mockOrderFromId(orderId) as T;
   }
 
   throw new Error(`Mock endpoint not implemented: ${method} ${endpoint}`);
