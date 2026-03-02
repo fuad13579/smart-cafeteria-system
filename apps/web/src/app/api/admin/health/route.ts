@@ -19,8 +19,15 @@ function resolveGatewayBase(): string {
 function parseChecksFromEnv(): Array<{ name: string; url: string }> {
   const raw = process.env.ADMIN_HEALTH_CHECKS_JSON;
   if (!raw) {
-    const gateway = resolveGatewayBase();
-    return [{ name: "order-gateway", url: `${gateway}/health` }];
+    // Local-first default: show all core services in docker-compose stack.
+    return [
+      { name: "identity-provider", url: "http://localhost:8001/health" },
+      { name: "order-gateway", url: "http://localhost:8002/health" },
+      { name: "stock-service", url: "http://localhost:8003/health" },
+      { name: "kitchen-queue", url: "http://localhost:8004/health" },
+      { name: "notification-hub", url: "http://localhost:8005/health" },
+      { name: "payment-service", url: "http://localhost:8006/health" },
+    ];
   }
 
   try {
