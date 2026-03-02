@@ -66,7 +66,7 @@ export default function App() {
       <React.Fragment>
         {isDemoMode && (
           <View style={styles.demoBanner} pointerEvents="none">
-            <Text style={styles.demoBannerText}>Demo Mode (Backend not connected)</Text>
+            <Text style={styles.demoBannerText}>Demo Mode</Text>
           </View>
         )}
         <Stack.Navigator

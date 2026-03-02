@@ -63,7 +63,7 @@ export function Header() {
     <header className="sticky top-0 z-10 border-b border-zinc-200 bg-white/80 backdrop-blur dark:border-zinc-900 dark:bg-zinc-950/80">
       {isDemoMode && (
         <div className="border-b border-amber-200 bg-amber-50 px-4 py-1 text-center text-xs font-medium text-amber-800 dark:border-amber-900/60 dark:bg-amber-950/40 dark:text-amber-200">
-          Demo Mode (Backend not connected)
+          Demo Mode
         </div>
       )}
       <div className="mx-auto flex max-w-4xl items-center justify-between px-4 py-3">
