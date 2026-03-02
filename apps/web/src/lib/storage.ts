@@ -10,6 +10,7 @@ export interface User {
   name: string;
   id?: string;
   student_id?: string;
+  email?: string;
   account_balance?: number;
   role?: string;
 }

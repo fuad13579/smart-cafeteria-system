@@ -53,12 +53,13 @@ export type OrderStatus =
   | "COMPLETED"
   | "CANCELLED";
 
-interface LoginResponse {
+export interface LoginResponse {
   access_token?: string;
   user: {
     name: string;
     id: string;
     student_id?: string;
+    email?: string;
     account_balance?: number;
     role?: string;
   };
@@ -145,6 +146,60 @@ export interface WalletTopupResponse {
 
 let mockAccountBalance = 1250;
 let mockAuthUser: LoginResponse["user"] | null = null;
+type MockUser = {
+  name: string;
+  student_id: string;
+  email: string;
+  password: string;
+  account_balance: number;
+  role: "student" | "admin";
+};
+const mockUsers = new Map<string, MockUser>([
+  [
+    "240041246",
+    {
+      name: "Fuad Bin Sattar",
+      student_id: "240041246",
+      email: "fuad@example.com",
+      password: "pass123",
+      account_balance: 1500,
+      role: "student",
+    },
+  ],
+  [
+    "240041248",
+    {
+      name: "Mahrus Shams",
+      student_id: "240041248",
+      email: "mahrus@example.com",
+      password: "pass 246",
+      account_balance: 1500,
+      role: "student",
+    },
+  ],
+  [
+    "240041250",
+    {
+      name: "Shahriar Hasnat",
+      student_id: "240041250",
+      email: "shahriar@example.com",
+      password: "pass 369",
+      account_balance: 1500,
+      role: "student",
+    },
+  ],
+  [
+    "admin-demo",
+    {
+      name: "Demo Admin",
+      student_id: "admin-demo",
+      email: "admin@example.com",
+      password: "admin-pass",
+      account_balance: 5000,
+      role: "admin",
+    },
+  ],
+]);
 type MockTopup = {
   topup_id: string;
   amount: number;
@@ -214,14 +269,56 @@ async function makeMockRequest<T>(
   }
 
   if (method === "POST" && endpoint === "/auth/login") {
-    const studentId = body?.student_id || "2100000";
-    const role = studentId === "admin-demo" ? "admin" : "student";
+    const studentId = String(body?.student_id || "").trim();
+    const password = String(body?.password || "");
+    const existing = mockUsers.get(studentId);
+    if (!existing || existing.password !== password) {
+      throw new Error("Invalid student ID or password");
+    }
+    mockAccountBalance = existing.account_balance;
     const user = {
-      name: "Mock User",
+      name: existing.name,
       id: studentId,
       student_id: studentId,
+      email: existing.email,
       account_balance: mockAccountBalance,
-      role,
+      role: existing.role,
+    };
+    mockAuthUser = user;
+    return {
+      access_token: "mock-token",
+      user,
+    } as T;
+  }
+
+  if (method === "POST" && endpoint === "/auth/register") {
+    const fullName = String(body?.full_name || "").trim();
+    const studentId = String(body?.student_id || "").trim();
+    const email = String(body?.email || "").trim().toLowerCase();
+    const password = String(body?.password || "");
+    if (!fullName) throw new Error("Full name is required");
+    if (!studentId) throw new Error("Student ID is required");
+    if (!email || !email.includes("@")) throw new Error("Valid email is required");
+    if (password.length < 6) throw new Error("Password must be at least 6 characters");
+    if (mockUsers.has(studentId)) throw new Error("Student ID already exists");
+    for (const user of mockUsers.values()) {
+      if (user.email.toLowerCase() === email) throw new Error("Email already exists");
+    }
+    mockUsers.set(studentId, {
+      name: fullName,
+      student_id: studentId,
+      email,
+      password,
+      account_balance: 0,
+      role: "student",
+    });
+    const user = {
+      name: fullName,
+      id: studentId,
+      student_id: studentId,
+      email,
+      account_balance: 0,
+      role: "student" as const,
     };
     mockAuthUser = user;
     return {
@@ -474,6 +571,15 @@ export async function login(
     student_id: studentId,
     password,
   });
+}
+
+export async function register(payload: {
+  full_name: string;
+  student_id: string;
+  email: string;
+  password: string;
+}): Promise<LoginResponse> {
+  return makeRequest<LoginResponse>("POST", "/auth/register", payload);
 }
 
 export async function me(): Promise<{ user: LoginResponse["user"] }> {
