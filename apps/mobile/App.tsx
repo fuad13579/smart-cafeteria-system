@@ -9,6 +9,8 @@ import LoginScreen from "./src/screens/LoginScreen.tsx";
 import MenuScreen from "./src/screens/MenuScreen.tsx";
 import CartScreen from "./src/screens/CartScreen.tsx";
 import OrderScreen from "./src/screens/OrderScreen.tsx";
+import OrdersScreen from "./src/screens/OrdersScreen.tsx";
+import WalletScreen from "./src/screens/WalletScreen.tsx";
 import ToastHost from "./components/Toast";
 
 export type RootStackParamList = {
@@ -16,6 +18,8 @@ export type RootStackParamList = {
   Menu: undefined;
   Cart: undefined;
   Order: { id: string };
+  Orders: undefined;
+  Wallet: undefined;
 };
 
 const Stack = createNativeStackNavigator<RootStackParamList>();
@@ -81,6 +85,8 @@ export default function App() {
           <Stack.Screen name="Login" component={LoginScreen} options={{ title: "Sign in" }} />
           <Stack.Screen name="Menu" component={MenuScreen} options={{ title: "Menu" }} />
           <Stack.Screen name="Cart" component={CartScreen} options={{ title: "Cart" }} />
+          <Stack.Screen name="Orders" component={OrdersScreen} options={{ title: "Orders" }} />
+          <Stack.Screen name="Wallet" component={WalletScreen} options={{ title: "Wallet" }} />
           <Stack.Screen name="Order" component={OrderScreen} options={{ title: "Order tracking" }} />
         </Stack.Navigator>
         <ToastHost />

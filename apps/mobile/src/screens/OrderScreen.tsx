@@ -17,6 +17,8 @@ export default function OrderScreen({ route, navigation }: Props) {
   const { id } = route.params;
   const [status, setStatus] = useState<OrderStatus>("QUEUED");
   const [eta, setEta] = useState(12);
+  const [tokenNo, setTokenNo] = useState<number | null>(null);
+  const [pickupCounter, setPickupCounter] = useState<number | null>(null);
   const [readyUntil, setReadyUntil] = useState<string | null>(null);
   const [serverExpired, setServerExpired] = useState(false);
   const [nowTs, setNowTs] = useState<number>(Date.now());
@@ -34,6 +36,8 @@ export default function OrderScreen({ route, navigation }: Props) {
         if (disposed) return;
         setErr(null);
         setStatus(res.status);
+        setTokenNo(typeof res.token_no === "number" ? res.token_no : null);
+        setPickupCounter(typeof res.pickup_counter === "number" ? res.pickup_counter : null);
         setEta(Math.max(0, res.eta_minutes ?? 0));
         setReadyUntil(typeof res.ready_until === "string" ? res.ready_until : null);
         setServerExpired(Boolean(res.is_expired));
@@ -84,6 +88,8 @@ export default function OrderScreen({ route, navigation }: Props) {
           const nextStatus = payload?.to_status as OrderStatus | undefined;
           if (!nextStatus) return;
           setStatus(nextStatus);
+          if (typeof payload?.token_no === "number") setTokenNo(payload.token_no);
+          if (typeof payload?.pickup_counter === "number") setPickupCounter(payload.pickup_counter);
           if (typeof payload?.ready_until === "string") setReadyUntil(payload.ready_until);
           if (typeof payload?.is_expired === "boolean") setServerExpired(payload.is_expired);
           if (typeof payload?.eta_minutes === "number") {
@@ -123,6 +129,8 @@ export default function OrderScreen({ route, navigation }: Props) {
       const res = await apiGetOrder(id);
       setErr(null);
       setStatus(res.status);
+      setTokenNo(typeof res.token_no === "number" ? res.token_no : null);
+      setPickupCounter(typeof res.pickup_counter === "number" ? res.pickup_counter : null);
       setEta(Math.max(0, res.eta_minutes ?? 0));
       setReadyUntil(typeof res.ready_until === "string" ? res.ready_until : null);
       setServerExpired(Boolean(res.is_expired));
@@ -153,6 +161,10 @@ export default function OrderScreen({ route, navigation }: Props) {
       <Text style={{ color: "#fafafa", fontSize: 20, fontWeight: "700" }}>Order tracking</Text>
       <Text style={{ color: "#a1a1aa", fontSize: 13 }}>
         Order ID <Text style={{ color: "#e4e4e7" }}>{id}</Text>
+      </Text>
+      <Text style={{ color: "#a1a1aa", fontSize: 13 }}>
+        Token <Text style={{ color: "#e4e4e7" }}>#{tokenNo ?? "-"}</Text> • Counter{" "}
+        <Text style={{ color: "#e4e4e7" }}>{pickupCounter ?? "-"}</Text>
       </Text>
 
       <View style={{ borderRadius: 18, borderWidth: 1, borderColor: "#18181b", padding: 14, gap: 10 }}>

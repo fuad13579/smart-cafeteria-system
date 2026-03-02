@@ -1,8 +1,9 @@
 import React, { useEffect, useMemo, useState } from "react";
 import { View, Text, TextInput, Pressable, FlatList, Image } from "react-native";
+import * as SecureStore from "expo-secure-store";
 import { NativeStackScreenProps } from "@react-navigation/native-stack";
 import { RootStackParamList } from "../../App";
-import { apiMenu, MenuItem } from "../lib/api";
+import { apiMenu, apiWalletBalance, MenuItem } from "../lib/api";
 import { useCart } from "../store/cart";
 import { toast } from "../../components/Toast";
 
@@ -16,6 +17,7 @@ export default function MenuScreen({ navigation }: Props) {
   const [q, setQ] = useState("");
   const [loading, setLoading] = useState(true);
   const [err, setErr] = useState<string | null>(null);
+  const [balance, setBalance] = useState<number | null>(null);
 
   useEffect(() => {
     (async () => {
@@ -24,6 +26,16 @@ export default function MenuScreen({ navigation }: Props) {
         setErr(null);
         const data = await apiMenu();
         setItems(data);
+        try {
+          const b = await apiWalletBalance();
+          setBalance(Number(b?.account_balance ?? 0));
+        } catch {
+          const raw = await SecureStore.getItemAsync("sc_user");
+          const user = raw ? JSON.parse(raw) : null;
+          if (typeof user?.account_balance === "number") {
+            setBalance(user.account_balance);
+          }
+        }
       } catch (e: any) {
         setErr(e?.message ?? "Failed to load menu");
       } finally {
@@ -107,6 +119,23 @@ export default function MenuScreen({ navigation }: Props) {
         >
           <Text style={{ color: "#fafafa", fontSize: 13 }}>Cart ({cartCount})</Text>
         </Pressable>
+        <Pressable
+          onPress={() => navigation.navigate("Wallet")}
+          style={{ borderRadius: 14, borderWidth: 1, borderColor: "#27272a", paddingHorizontal: 12, paddingVertical: 10 }}
+        >
+          <Text style={{ color: "#fafafa", fontSize: 13 }}>Wallet</Text>
+        </Pressable>
+        <Pressable
+          onPress={() => navigation.navigate("Orders")}
+          style={{ borderRadius: 14, borderWidth: 1, borderColor: "#27272a", paddingHorizontal: 12, paddingVertical: 10 }}
+        >
+          <Text style={{ color: "#fafafa", fontSize: 13 }}>Orders</Text>
+        </Pressable>
+      </View>
+
+      <View style={{ marginBottom: 12, borderRadius: 14, borderWidth: 1, borderColor: "#18181b", padding: 10 }}>
+        <Text style={{ color: "#a1a1aa", fontSize: 12 }}>Account balance</Text>
+        <Text style={{ color: "#fafafa", fontSize: 18, fontWeight: "700", marginTop: 2 }}>BDT {balance ?? 0}</Text>
       </View>
 
       {loading && <Text style={{ color: "#a1a1aa" }}>Loading menu…</Text>}
