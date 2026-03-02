@@ -4,11 +4,7 @@ type ApiMode = "mock" | "real";
 type MockScenario = "success" | "timeout" | "unauthorized" | "server_error";
 
 const API_MODE: ApiMode =
-  process.env.EXPO_PUBLIC_API_MODE === "real" || process.env.EXPO_PUBLIC_API_MODE === "mock"
-    ? process.env.EXPO_PUBLIC_API_MODE
-    : process.env.NODE_ENV === "production"
-    ? "real"
-    : "mock";
+  process.env.EXPO_PUBLIC_API_MODE === "real" ? "real" : "mock";
 const API_BASE_URL =
   process.env.EXPO_PUBLIC_API_BASE_URL ?? "http://localhost:8002";
 const API_PREFIX = process.env.EXPO_PUBLIC_API_PREFIX ?? "/api";
