@@ -170,6 +170,26 @@ make smoke-test
 
 Expected result: all phases pass (`auth`, `menu`, `create`, `status`, `admin metrics`) with no `FAIL` lines.
 
+## Wallet Page Guide
+Student wallet page is available at:
+- `http://localhost:3000/wallet`
+
+Student flow:
+1. Sign in as a student user.
+2. Open `Wallet` from the navbar.
+3. Click `Add Money`.
+4. Enter amount and select method (`bKash`, `Nagad`, `Bank`).
+5. Submit payment details in the same popup form.
+
+Transaction behavior:
+- `bKash` / `Nagad` in demo mode: completes immediately (or near-immediate demo success), balance updates.
+- `Bank`: created as `PENDING` and waits for admin review.
+
+Admin bank verification:
+1. Sign in as admin (`admin-demo` / `admin-pass`).
+2. Open `http://localhost:3000/admin`.
+3. In **Bank Top-up Verification Queue**, approve or reject pending bank top-ups.
+
 ## Known Limitations
 - Wallet payment providers (`bKash`, `Nagad`, `Bank`) are demo-mode integrations.
 - Web order tracking may use polling in some flows; websocket updates are available in real mode where configured.
