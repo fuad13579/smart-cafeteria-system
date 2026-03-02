@@ -17,6 +17,45 @@ const terminalStates: OrderStatus[] = ["READY", "COMPLETED", "CANCELLED"];
 const NOTIFICATION_WS_URL =
   process.env.NEXT_PUBLIC_NOTIFICATION_WS_URL || "ws://localhost:8005/ws";
 
+function buildMockSlipHtml(input: {
+  orderId: string;
+  tokenNo: number | null;
+  pickupCounter: number | null;
+  status: string;
+  eta: number;
+}) {
+  const now = new Date().toLocaleString();
+  const token = input.tokenNo ?? "-";
+  const counter = input.pickupCounter ?? 1;
+  return `<!doctype html>
+<html>
+  <head>
+    <meta charset="utf-8" />
+    <title>Order Slip</title>
+    <style>
+      @media print { @page { size: A6; margin: 8mm; } }
+      body { font-family: Arial, sans-serif; margin: 0; padding: 12px; color: #111; }
+      .box { border: 1px solid #111; border-radius: 8px; padding: 12px; }
+      .token { font-size: 36px; font-weight: 700; text-align: center; margin: 8px 0 10px; }
+      .row { margin: 4px 0; font-size: 12px; }
+      .muted { color: #555; }
+    </style>
+  </head>
+  <body>
+    <div class="box">
+      <div class="muted">Smart Cafeteria - Demo Slip</div>
+      <div class="token">TOKEN #${token}</div>
+      <div class="row"><strong>Order:</strong> ${input.orderId}</div>
+      <div class="row"><strong>Counter:</strong> ${counter}</div>
+      <div class="row"><strong>Status:</strong> ${input.status}</div>
+      <div class="row"><strong>ETA:</strong> ${input.eta} min</div>
+      <div class="row"><strong>Printed:</strong> ${now}</div>
+    </div>
+    <script>window.print()</script>
+  </body>
+</html>`;
+}
+
 function Step({ label, active }: { label: string; active: boolean }) {
   return (
     <div className="flex items-center gap-3">
@@ -158,6 +197,22 @@ export default function OrderPage() {
 
   const onPrintSlip = async () => {
     if (!orderId) return;
+    if (process.env.NEXT_PUBLIC_API_MODE !== "real") {
+      const w = window.open("", "_blank", "noopener,noreferrer");
+      if (!w) return;
+      w.document.open();
+      w.document.write(
+        buildMockSlipHtml({
+          orderId,
+          tokenNo,
+          pickupCounter,
+          status,
+          eta,
+        })
+      );
+      w.document.close();
+      return;
+    }
     window.open(getOrderSlipUrl(orderId, true), "_blank", "noopener,noreferrer");
     try {
       await markOrderSlipPrinted(orderId);
