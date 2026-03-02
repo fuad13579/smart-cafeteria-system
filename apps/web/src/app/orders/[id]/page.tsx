@@ -48,7 +48,8 @@ export default function OrderPage() {
       if (showLoading) setLoading(true);
       try {
         const mine = await getMyOrders();
-        const fromList = mine.orders.find((o) => o.order_id === orderId);
+        const orders = Array.isArray(mine?.orders) ? mine.orders : [];
+        const fromList = orders.find((o) => o.order_id === orderId);
         const res = fromList ?? (await getOrder(orderId));
         if (cancelled) return;
         setErr(null);
