@@ -60,6 +60,10 @@ type AdminWalletTopup = {
   completed_at?: string | null;
 };
 
+function formatMetric(value: unknown, suffix = ""): string {
+  return typeof value === "number" && Number.isFinite(value) ? `${value}${suffix}` : "—";
+}
+
 function Badge({ status }: { status: Service["status"] }) {
   const cls =
     status === "up"
@@ -217,15 +221,25 @@ export function AdminDashboardClient() {
 
     async function refresh() {
       try {
-        const [h, m] = await Promise.all([
-          fetch("/api/admin/health", { cache: "no-store" }).then((r) => r.json()),
-          fetch("/api/admin/metrics", { cache: "no-store" }).then((r) => r.json()),
+        const [healthRes, metricsRes] = await Promise.all([
+          fetch("/api/admin/health", { cache: "no-store" }),
+          fetch("/api/admin/metrics", { cache: "no-store" }),
         ]);
         if (!alive) return;
-        setHealth(h);
-        setMetrics(m);
+        const healthPayload = await healthRes.json().catch(() => null);
+        const metricsPayload = await metricsRes.json().catch(() => null);
+
+        if (healthRes.ok && healthPayload) {
+          setHealth(healthPayload);
+        }
+        if (metricsRes.ok && metricsPayload) {
+          setMetrics(metricsPayload);
+        } else {
+          setMetrics(null);
+        }
       } catch {
         // ignore transient fetch failures in dashboard poller
+        if (alive) setMetrics(null);
       }
     }
 
@@ -620,22 +634,22 @@ export function AdminDashboardClient() {
       <div className="mt-6 grid grid-cols-1 gap-3 sm:grid-cols-4">
         <StatCard
           title="Latency (p50)"
-          value={metrics ? `${metrics.latency_ms_p50} ms` : "—"}
+          value={metrics ? formatMetric(metrics.latency_ms_p50, " ms") : "—"}
           sub="Median response time"
         />
         <StatCard
           title="Latency (p95)"
-          value={metrics ? `${metrics.latency_ms_p95} ms` : "—"}
+          value={metrics ? formatMetric(metrics.latency_ms_p95, " ms") : "—"}
           sub="Worst-case baseline"
         />
         <StatCard
           title="Throughput"
-          value={metrics ? `${metrics.orders_per_min}/min` : "—"}
+          value={metrics ? formatMetric(metrics.orders_per_min, "/min") : "—"}
           sub="Orders per minute"
         />
         <StatCard
           title="Kitchen queue"
-          value={metrics ? `${metrics.queue_depth}` : "—"}
+          value={metrics ? formatMetric(metrics.queue_depth) : "—"}
           sub="Tickets waiting"
         />
       </div>
