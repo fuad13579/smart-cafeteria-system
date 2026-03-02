@@ -2,6 +2,21 @@
 
 Domain (example): `api.103.182.213.241.nip.io`
 
+## Localhost Quick Start (Full Stack)
+
+Run everything locally on localhost:
+
+```bash
+cd /root/smart-cafeteria-system
+docker compose -f infra/docker-compose.yml up -d --build
+npm --prefix apps/web run dev
+npm --prefix apps/mobile start
+```
+
+Use these local envs:
+- Web: `NEXT_PUBLIC_API_MODE=real`, `NEXT_PUBLIC_API_BASE_URL=http://localhost:8002`
+- Mobile: `EXPO_PUBLIC_API_MODE=real`, `EXPO_PUBLIC_API_BASE_URL=http://localhost:8002`
+
 ## 1) Push Latest Code
 
 ```bash
