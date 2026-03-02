@@ -6,21 +6,30 @@ import { AdminDashboardClient } from "@/components/AdminDashboardClient";
 const API_BASE = process.env.NEXT_PUBLIC_API_BASE_URL || "http://localhost:8002";
 const API_PREFIX = process.env.NEXT_PUBLIC_API_PREFIX || "/api";
 const ACCESS_COOKIE_NAME = process.env.ACCESS_COOKIE_NAME || "access_token";
+const API_MODE = process.env.NEXT_PUBLIC_API_MODE === "real" ? "real" : "mock";
 
 async function getCurrentUserFromGateway(token: string): Promise<any | null> {
-  const prefix = API_PREFIX.startsWith("/") ? API_PREFIX : `/${API_PREFIX}`;
-  const res = await fetch(`${API_BASE}${prefix}/auth/me`, {
-    headers: {
-      Authorization: `Bearer ${token}`,
-    },
-    cache: "no-store",
-  });
-  if (!res.ok) return null;
-  const body = await res.json().catch(() => null);
-  return body?.user ?? null;
+  try {
+    const prefix = API_PREFIX.startsWith("/") ? API_PREFIX : `/${API_PREFIX}`;
+    const res = await fetch(`${API_BASE}${prefix}/auth/me`, {
+      headers: {
+        Authorization: `Bearer ${token}`,
+      },
+      cache: "no-store",
+    });
+    if (!res.ok) return null;
+    const body = await res.json().catch(() => null);
+    return body?.user ?? null;
+  } catch {
+    return null;
+  }
 }
 
 export default async function AdminPage() {
+  if (API_MODE !== "real") {
+    return <AdminDashboardClient />;
+  }
+
   const jar = await cookies();
   const token = jar.get(ACCESS_COOKIE_NAME)?.value;
   if (!token) {
