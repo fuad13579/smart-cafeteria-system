@@ -269,6 +269,21 @@ curl -s -X POST http://localhost:8003/chaos/fail \
 - Live metrics (latency, throughput, queue depth)
 - Chaos toggle (service fail/recover)
 
+### How admin accesses and uses facilities
+1. Sign in with admin account:
+   - Student ID: `admin-demo`
+   - Password: `admin-pass`
+2. Open `http://localhost:3000/admin`.
+3. Use **Menu Manager** to create/update items, change stock, and toggle availability.
+4. Use **Menu Windows** and **Menu Slot Assignment** to configure Ramadan windows and assign item IDs per slot.
+5. Use **Kitchen Peak Mode** to enable/disable manual kitchen controls for rush operation.
+6. Use **Chaos Control**:
+   - Select target service
+   - Choose `Kill` or `Restart`
+   - Click `Run chaos` and observe health/metrics impact
+   - Use `Recover all services` to clear fail mode quickly
+7. Use **Service Health** + metric cards to monitor recovery (`latency`, `orders/min`, `kitchen.jobs`, `order.status` queue depth).
+
 ## 10) Monorepo Structure
 
 ```text
