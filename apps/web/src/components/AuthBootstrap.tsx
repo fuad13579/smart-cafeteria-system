@@ -34,7 +34,7 @@ export function AuthBootstrap() {
   if (!showLoginMessage) return null;
 
   return (
-    <div className="mx-auto mt-4 w-full max-w-4xl rounded-xl border border-amber-300 bg-amber-50 px-4 py-3 text-sm text-amber-800 dark:border-amber-900 dark:bg-amber-950/40 dark:text-amber-200">
+    <div className="mx-auto mt-3 w-full max-w-4xl rounded-xl border border-amber-300 bg-amber-50 px-3 py-2 text-xs leading-snug text-amber-800 sm:px-4 sm:py-3 sm:text-sm dark:border-amber-900 dark:bg-amber-950/40 dark:text-amber-200">
       Login first to continue using this page.
     </div>
   );

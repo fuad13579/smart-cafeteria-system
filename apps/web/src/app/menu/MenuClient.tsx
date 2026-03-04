@@ -110,7 +110,7 @@ export default function MenuClient() {
 
   return (
     <div>
-      <div className="flex flex-col gap-2 sm:flex-row sm:items-end sm:justify-between">
+      <div className="flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
         <div>
           <h1 className="text-2xl font-semibold text-zinc-900 dark:text-white">Menu</h1>
           <p className="mt-2 text-sm text-zinc-600 dark:text-zinc-400">
@@ -125,7 +125,7 @@ export default function MenuClient() {
               Account balance: <span className="font-semibold">BDT {currentUser.account_balance}</span>
             </div>
           )}
-          <div className="flex gap-2">
+          <div className="flex flex-col gap-2 sm:flex-row">
             <input
               value={q}
               onChange={(e) => setQ(e.target.value)}
@@ -134,7 +134,7 @@ export default function MenuClient() {
             />
             <Link
               href="/cart"
-              className="rounded-xl border border-zinc-300 px-4 py-2 text-sm text-zinc-700 hover:bg-zinc-100 dark:border-zinc-800 dark:text-zinc-200 dark:hover:bg-zinc-900"
+              className="w-full rounded-xl border border-zinc-300 px-4 py-2 text-center text-sm text-zinc-700 hover:bg-zinc-100 sm:w-auto dark:border-zinc-800 dark:text-zinc-200 dark:hover:bg-zinc-900"
             >
               View cart
             </Link>

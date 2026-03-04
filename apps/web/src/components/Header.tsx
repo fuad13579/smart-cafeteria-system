@@ -10,7 +10,13 @@ import { MobileTabBar } from "@/components/MobileTabBar";
 
 function NavLink({ href, label }: { href: string; label: string }) {
   const pathname = usePathname();
-  const active = pathname === href || (href !== "/" && pathname?.startsWith(href));
+  const [mounted, setMounted] = useState(false);
+
+  useEffect(() => {
+    setMounted(true);
+  }, []);
+
+  const active = mounted && (pathname === href || (href !== "/" && pathname?.startsWith(href)));
 
   return (
     <Link
@@ -67,12 +73,12 @@ export function Header() {
           Demo Mode
         </div>
       )}
-      <div className="mx-auto flex max-w-4xl items-center justify-between px-4 py-3">
+      <div className="mx-auto flex max-w-4xl items-center justify-between px-3 py-2 sm:px-4 sm:py-3">
         <Link href="/menu" className="flex items-center gap-2">
           <Image src="/iut-logo.png" alt="IUT logo" width={36} height={36} className="rounded-md object-contain" />
           <div className="leading-tight">
             <div className="text-sm font-semibold text-zinc-900 dark:text-white">Smart Cafeteria</div>
-            <div className="text-xs text-zinc-600 dark:text-zinc-400">Islamic University of Technology</div>
+            <div className="hidden text-xs text-zinc-600 dark:text-zinc-400 sm:block">IUT Ordering</div>
           </div>
         </Link>
 
