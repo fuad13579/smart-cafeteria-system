@@ -81,6 +81,8 @@ npm --prefix apps/mobile start
 Helpful commands:
 
 ```bash
+make up-infra
+make up-all
 make ps
 make logs
 make down
@@ -88,6 +90,22 @@ make db-reset
 make demo-seed
 make smoke-test
 ```
+
+## Service Ports
+| Service | Port |
+|---|---|
+| Web (Next.js) | `3000` |
+| Identity Provider | `8001` |
+| Order Gateway | `8002` |
+| Stock Service | `8003` |
+| Kitchen Queue | `8004` |
+| Notification Hub | `8005` |
+| Payment Service (future/demo scope) | `8006` |
+| Postgres | `5432` |
+| PgBouncer | `6432` |
+| Redis | `6379` |
+| RabbitMQ AMQP | `5672` |
+| RabbitMQ Management UI | `15672` |
 
 ## Admin Page Access
 1. Start the stack and web app:
@@ -170,31 +188,16 @@ make smoke-test
 
 Expected result: all phases pass (`auth`, `menu`, `create`, `status`, `admin metrics`) with no `FAIL` lines.
 
-## Wallet Page Guide
-Student wallet page is available at:
-- `http://localhost:3000/wallet`
+## Demo Script
+Judge-facing demo sequence is documented in:
+- `docs/demo-script.md`
 
-Student flow:
-1. Sign in as a student user.
-2. Open `Wallet` from the navbar.
-3. Click `Add Money`.
-4. Enter amount and select method (`bKash`, `Nagad`, `Bank`).
-5. Submit payment details in the same popup form.
-
-Transaction behavior:
-- `bKash` / `Nagad` in demo mode: completes immediately (or near-immediate demo success), balance updates.
-- `Bank`: created as `PENDING` and waits for admin review.
-- Mock payment provider APIs are exposed by `payment-service` on:
-  - `POST /wallet/topups/mock`
-  - `POST /wallet/webhook/{provider}`
-  - `GET /wallet/topups/mock/{topup_id}`
-
-Admin bank verification:
-1. Sign in as admin (`username:-admin-demo` / `password:-admin-pass`).
-2. Open `http://localhost:3000/admin`.
-3. In **Bank Top-up Verification Queue**, approve or reject pending bank top-ups.
+## Payment Scope For Submission
+This submission uses **Option 2** (no wallet/top-up claims in judged flow):
+- Student and admin UI navigation does not expose wallet/top-up pages.
+- Judge demo flow is strictly: login -> menu -> order -> live status -> admin health/metrics/chaos.
+- Mock wallet/provider webhook endpoints remain in backend as future work, not part of required demo.
 
 ## Known Limitations
-- Wallet payment providers (`bKash`, `Nagad`, `Bank`) are demo-mode integrations.
 - Web order tracking may use polling in some flows; websocket updates are available in real mode where configured.
 - Production deployment needs real TLS/domain setup and reverse-proxy routing for API/admin paths.

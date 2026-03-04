@@ -1437,27 +1437,42 @@ def _admin_service_health_map() -> dict[str, str]:
 
 @app.get("/admin/health")
 @app.get("/admin/h")
-def admin_health():
+def admin_health(
+    authorization: str | None = Header(default=None),
+    access_token: str | None = Cookie(default=None, alias=ACCESS_COOKIE_NAME),
+):
+    _require_admin(authorization, access_token)
     services = _admin_service_health_map()
     return {"services": services, "updated_at": datetime.now(timezone.utc).isoformat()}
 
 
 @app.get("/api/admin/metrics")
-def get_admin_metrics():
+def get_admin_metrics(
+    authorization: str | None = Header(default=None),
+    access_token: str | None = Cookie(default=None, alias=ACCESS_COOKIE_NAME),
+):
+    _require_admin(authorization, access_token)
     uptime_minutes = max((time.time() - service_started_at) / 60.0, 1.0 / 60.0)
+    kitchen_queue_depth = _queue_depth("kitchen.jobs")
+    status_queue_depth = _queue_depth("order.status")
     return {
         "latency_ms_p50": round(_percentile(latency_samples_ms, 50), 2),
         "latency_ms_p95": round(_percentile(latency_samples_ms, 95), 2),
         "orders_per_min": round(metrics["orders_total"] / uptime_minutes, 2),
-        "queue_depth": _queue_depth("kitchen.jobs"),
+        "queue_depth": kitchen_queue_depth,
+        "queue_depth_kitchen_jobs": kitchen_queue_depth,
+        "queue_depth_order_status": status_queue_depth,
         "outbox_backlog": _outbox_backlog(),
         "updatedAt": int(time.time()),
     }
 
 
 @app.get("/admin/metrics")
-def get_admin_metrics_alias():
-    return get_admin_metrics()
+def get_admin_metrics_alias(
+    authorization: str | None = Header(default=None),
+    access_token: str | None = Cookie(default=None, alias=ACCESS_COOKIE_NAME),
+):
+    return get_admin_metrics(authorization=authorization, access_token=access_token)
 
 
 @app.on_event("startup")

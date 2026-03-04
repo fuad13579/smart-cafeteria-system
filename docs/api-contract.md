@@ -101,8 +101,11 @@ Failure:
 - `404`: `{ "message": "Order not found", "error": "Not Found" }`
 - `401`: `{ "message": "Unauthorized", "error": "Unauthorized" }`
 
-## Payment Service (Mock Wallet Endpoints)
+## Payment Service (Future / Not In Submission Demo)
 Base URL (payment-service): `http://localhost:8006`
+
+The endpoints below are retained as mock integration references only.
+They are **not part of the judged student/admin demo flow** for this submission.
 
 ### POST `/wallet/topups/mock`
 Request:
@@ -173,6 +176,9 @@ Success `200`:
 Base URL: `http://localhost:3000`
 
 ### GET `/api/admin/health`
+Headers:
+- `Authorization: Bearer <access_token>` (admin)
+
 Success `200`:
 ```json
 {
@@ -182,8 +188,14 @@ Success `200`:
   "updatedAt": "2026-02-28T10:00:00Z"
 }
 ```
+Failure:
+- `401`: missing/invalid token
+- `403`: non-admin user
 
 ### GET `/api/admin/metrics`
+Headers:
+- `Authorization: Bearer <access_token>` (admin)
+
 Success `200`:
 ```json
 {
@@ -191,14 +203,8 @@ Success `200`:
   "latency_ms_p95": 60,
   "orders_per_min": 12,
   "queue_depth": 3,
-  "queue_stats": {
-    "kitchen.jobs": 2,
-    "order.status": 1
-  },
-  "kitchen_queue_depth": 2,
-  "status_queue_depth": 1,
-  "rabbitmq_publish_per_sec": 0.2,
-  "rabbitmq_deliver_per_sec": 0.2,
+  "queue_depth_kitchen_jobs": 2,
+  "queue_depth_order_status": 1,
   "updatedAt": "2026-02-28T10:00:00Z"
 }
 ```
@@ -207,9 +213,14 @@ Required keys (must exist):
 - `latency_ms_p95`
 - `orders_per_min`
 - `queue_depth`
+- `queue_depth_kitchen_jobs`
+- `queue_depth_order_status`
 - `updatedAt`
 
 ### POST `/api/admin/chaos`
+Headers:
+- `Authorization: Bearer <access_token>` (admin)
+
 Request:
 ```json
 {

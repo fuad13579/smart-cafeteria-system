@@ -107,7 +107,6 @@ export function Header() {
         <nav className="hidden items-center gap-2 sm:flex">
           <NavLink href="/menu" label="Menu" />
           <NavLink href="/cart" label={`Cart (${cartCount})`} />
-          <NavLink href="/wallet" label="Wallet" />
           <NavLink href="/orders" label="Orders" />
           {currentUser?.role === "admin" && <NavLink href="/kitchen" label="Kitchen" />}
           {currentUser?.role === "admin" && <NavLink href="/admin" label="Admin" />}
@@ -139,9 +138,6 @@ export function Header() {
             </Link>
             <Link href="/cart" className={mobileLinkClass("/cart")} onClick={() => setMobileOpen(false)}>
               Cart ({cartCount})
-            </Link>
-            <Link href="/wallet" className={mobileLinkClass("/wallet")} onClick={() => setMobileOpen(false)}>
-              Wallet
             </Link>
             <Link href="/orders" className={mobileLinkClass("/orders")} onClick={() => setMobileOpen(false)}>
               Orders

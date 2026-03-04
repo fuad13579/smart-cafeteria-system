@@ -10,6 +10,8 @@ type MetricsResp = {
   latency_ms_p95: number;
   orders_per_min: number;
   queue_depth: number;
+  queue_depth_kitchen_jobs?: number;
+  queue_depth_order_status?: number;
   updatedAt: string;
 };
 
@@ -92,6 +94,7 @@ function toTitleCase(value: string): string {
 }
 
 export function AdminDashboardClient() {
+  const walletEnabled = process.env.NEXT_PUBLIC_WALLET_ENABLED === "true";
   const [health, setHealth] = useState<HealthResp | null>(null);
   const [metrics, setMetrics] = useState<MetricsResp | null>(null);
   const [busy, setBusy] = useState(false);
@@ -248,14 +251,16 @@ export function AdminDashboardClient() {
     loadWindows();
     loadMenuSlots();
     loadRamadanVisibility();
-    loadWalletTopups();
+    if (walletEnabled) {
+      loadWalletTopups();
+    }
     loadPeakMode();
     const t = setInterval(refresh, 2000);
     return () => {
       alive = false;
       clearInterval(t);
     };
-  }, []);
+  }, [walletEnabled]);
 
   useEffect(() => {
     if (slotMain === "regular" && !["breakfast", "lunch", "dinner"].includes(slotChoice)) {
@@ -267,9 +272,10 @@ export function AdminDashboardClient() {
   }, [slotMain, slotChoice]);
 
   useEffect(() => {
+    if (!walletEnabled) return;
     loadWalletTopups(walletFilter);
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [walletFilter]);
+  }, [walletEnabled, walletFilter]);
 
   const runChaos = async () => {
     setBusy(true);
@@ -631,7 +637,7 @@ export function AdminDashboardClient() {
         </div>
       </div>
 
-      <div className="mt-6 grid grid-cols-1 gap-3 sm:grid-cols-4">
+      <div className="mt-6 grid grid-cols-1 gap-3 sm:grid-cols-5">
         <StatCard
           title="Latency (p50)"
           value={metrics ? formatMetric(metrics.latency_ms_p50, " ms") : "—"}
@@ -649,8 +655,13 @@ export function AdminDashboardClient() {
         />
         <StatCard
           title="Kitchen queue"
-          value={metrics ? formatMetric(metrics.queue_depth) : "—"}
+          value={metrics ? formatMetric(metrics.queue_depth_kitchen_jobs ?? metrics.queue_depth) : "—"}
           sub="Tickets waiting"
+        />
+        <StatCard
+          title="Status queue"
+          value={metrics ? formatMetric(metrics.queue_depth_order_status ?? 0) : "—"}
+          sub="order.status backlog"
         />
       </div>
 
@@ -1193,10 +1204,11 @@ export function AdminDashboardClient() {
         </div>
       </div>
 
-      <div className="mt-6 rounded-2xl border border-zinc-200 bg-zinc-50 p-4 dark:border-zinc-900 dark:bg-zinc-950">
-        <div className="flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
-          <div>
-            <div className="text-sm font-medium">Bank Top-up Verification Queue</div>
+      {walletEnabled && (
+        <div className="mt-6 rounded-2xl border border-zinc-200 bg-zinc-50 p-4 dark:border-zinc-900 dark:bg-zinc-950">
+          <div className="flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
+            <div>
+              <div className="text-sm font-medium">Bank Top-up Verification Queue</div>
             <p className="mt-1 text-sm text-zinc-600 dark:text-zinc-400">
               Review pending wallet top-ups and approve/reject manually.
             </p>
@@ -1274,6 +1286,7 @@ export function AdminDashboardClient() {
           </table>
         </div>
       </div>
+      )}
     </div>
   );
 }

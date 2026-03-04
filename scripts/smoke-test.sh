@@ -5,6 +5,8 @@ set -euo pipefail
 : "${ADMIN_BASE_URL:=http://localhost:8002}"
 : "${STUDENT_ID:=240041246}"
 : "${PASSWORD:=pass123}"
+: "${ADMIN_STUDENT_ID:=admin-demo}"
+: "${ADMIN_PASSWORD:=admin-pass}"
 
 require_cmd() {
   if ! command -v "$1" >/dev/null 2>&1; then
@@ -138,7 +140,23 @@ if ! [[ "$eta_minutes" =~ ^[0-9]+$ ]]; then
 fi
 
 echo "[5/5] Check admin metrics keys"
-metrics_result="$(request GET "$ADMIN_BASE_URL/api/admin/metrics")"
+admin_login_payload=$(printf '{"student_id":"%s","password":"%s"}' "$ADMIN_STUDENT_ID" "$ADMIN_PASSWORD")
+admin_login_result="$(request POST "$GATEWAY_BASE_URL/api/login" "$admin_login_payload")"
+admin_login_code="$(echo "$admin_login_result" | sed -n '1p')"
+admin_login_body="$(echo "$admin_login_result" | sed '1d')"
+if [[ "$admin_login_code" != "200" ]]; then
+  echo "Admin login failed: HTTP $admin_login_code"
+  echo "$admin_login_body"
+  exit 1
+fi
+ADMIN_TOKEN="$(echo "$admin_login_body" | json_get access_token)"
+if [[ -z "$ADMIN_TOKEN" ]]; then
+  echo "Admin login response missing access_token"
+  echo "$admin_login_body"
+  exit 1
+fi
+
+metrics_result="$(request GET "$ADMIN_BASE_URL/api/admin/metrics" "" "$ADMIN_TOKEN")"
 metrics_code="$(echo "$metrics_result" | sed -n '1p')"
 metrics_body="$(echo "$metrics_result" | sed '1d')"
 if [[ "$metrics_code" != "200" ]]; then
