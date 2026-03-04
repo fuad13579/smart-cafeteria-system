@@ -6,7 +6,6 @@ import { useEffect, useState } from "react";
 import { useTheme } from "next-themes";
 import { getCart, getUser, type CartLine, type User } from "@/lib/storage";
 import { usePathname } from "next/navigation";
-import { MobileTabBar } from "@/components/MobileTabBar";
 
 function NavLink({ href, label }: { href: string; label: string }) {
   const pathname = usePathname();
@@ -34,15 +33,21 @@ function NavLink({ href, label }: { href: string; label: string }) {
 }
 
 export function Header() {
+  const pathname = usePathname();
   const isDemoMode = process.env.NEXT_PUBLIC_API_MODE !== "real";
   const [cartCount, setCartCount] = useState(0);
   const [currentUser, setCurrentUser] = useState<User | null>(null);
   const [mounted, setMounted] = useState(false);
+  const [mobileOpen, setMobileOpen] = useState(false);
   const { resolvedTheme, setTheme } = useTheme();
 
   useEffect(() => {
     setMounted(true);
   }, []);
+
+  useEffect(() => {
+    setMobileOpen(false);
+  }, [pathname]);
 
   useEffect(() => {
     const sync = () => {
@@ -66,6 +71,17 @@ export function Header() {
     setTheme(resolvedTheme === "dark" ? "light" : "dark");
   };
 
+  const isActive = (href: string) =>
+    mounted && (pathname === href || (href !== "/" && pathname?.startsWith(href)));
+
+  const mobileLinkClass = (href: string) =>
+    [
+      "rounded-lg px-2.5 py-1.5 text-sm transition",
+      isActive(href)
+        ? "bg-zinc-200 text-zinc-900 dark:bg-zinc-800 dark:text-white"
+        : "text-zinc-700 hover:bg-zinc-100 hover:text-zinc-900 dark:text-zinc-300 dark:hover:bg-zinc-900 dark:hover:text-white",
+    ].join(" ");
+
   return (
     <header className="sticky top-0 z-10 border-b border-zinc-200 bg-white/80 backdrop-blur dark:border-zinc-900 dark:bg-zinc-950/80">
       {isDemoMode && (
@@ -75,7 +91,13 @@ export function Header() {
       )}
       <div className="mx-auto flex max-w-4xl items-center justify-between px-3 py-2 sm:px-4 sm:py-3">
         <Link href="/menu" className="flex items-center gap-2">
-          <Image src="/iut-logo.png" alt="IUT logo" width={36} height={36} className="rounded-md object-contain" />
+          <Image
+            src="/iut-logo.png"
+            alt="IUT logo"
+            width={36}
+            height={36}
+            className="h-8 w-8 rounded-md object-contain sm:h-9 sm:w-9"
+          />
           <div className="leading-tight">
             <div className="text-sm font-semibold text-zinc-900 dark:text-white">Smart Cafeteria</div>
             <div className="hidden text-xs text-zinc-600 dark:text-zinc-400 sm:block">IUT Ordering</div>
@@ -99,8 +121,53 @@ export function Header() {
             {mounted ? (resolvedTheme === "dark" ? "Light" : "Dark") : "Theme"}
           </button>
         </nav>
+
+        <button
+          onClick={() => setMobileOpen((v) => !v)}
+          className="rounded-lg border border-zinc-200 px-2 py-1 text-sm text-zinc-700 hover:bg-zinc-100 sm:hidden dark:border-zinc-800 dark:text-zinc-200 dark:hover:bg-zinc-900"
+          aria-label="Toggle navigation menu"
+          aria-expanded={mobileOpen}
+        >
+          {mobileOpen ? "Close" : "Menu"}
+        </button>
       </div>
-      <MobileTabBar cartCount={cartCount} />
+      {mobileOpen && (
+        <nav className="border-t border-zinc-200 px-3 py-2 sm:hidden dark:border-zinc-900">
+          <div className="mx-auto flex max-w-4xl flex-col gap-1">
+            <Link href="/menu" className={mobileLinkClass("/menu")} onClick={() => setMobileOpen(false)}>
+              Menu
+            </Link>
+            <Link href="/cart" className={mobileLinkClass("/cart")} onClick={() => setMobileOpen(false)}>
+              Cart ({cartCount})
+            </Link>
+            <Link href="/wallet" className={mobileLinkClass("/wallet")} onClick={() => setMobileOpen(false)}>
+              Wallet
+            </Link>
+            <Link href="/orders" className={mobileLinkClass("/orders")} onClick={() => setMobileOpen(false)}>
+              Orders
+            </Link>
+            {currentUser?.role === "admin" && (
+              <Link href="/kitchen" className={mobileLinkClass("/kitchen")} onClick={() => setMobileOpen(false)}>
+                Kitchen
+              </Link>
+            )}
+            {currentUser?.role === "admin" && (
+              <Link href="/admin" className={mobileLinkClass("/admin")} onClick={() => setMobileOpen(false)}>
+                Admin
+              </Link>
+            )}
+            <Link href="/login" className={mobileLinkClass("/login")} onClick={() => setMobileOpen(false)}>
+              Login
+            </Link>
+            <button
+              onClick={toggleTheme}
+              className="mt-1 rounded-lg border border-zinc-200 px-2.5 py-1.5 text-left text-sm text-zinc-700 hover:bg-zinc-100 dark:border-zinc-800 dark:text-zinc-200 dark:hover:bg-zinc-900"
+            >
+              {mounted ? (resolvedTheme === "dark" ? "Light mode" : "Dark mode") : "Theme"}
+            </button>
+          </div>
+        </nav>
+      )}
     </header>
   );
 }

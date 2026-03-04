@@ -240,7 +240,7 @@ export default function OrderPage() {
     <div className="mx-auto max-w-xl">
       <div className="flex items-end justify-between gap-3">
         <div>
-          <h1 className="text-2xl font-semibold text-zinc-900 dark:text-white">Order tracking</h1>
+          <h1 className="text-xl font-semibold text-zinc-900 sm:text-2xl dark:text-white">Order tracking</h1>
           <p className="mt-2 text-sm text-zinc-600 dark:text-zinc-400">
             Order ID <span className="text-zinc-900 dark:text-zinc-200">{params.id}</span>
           </p>
