@@ -37,7 +37,7 @@ No changes under `database/`.
   - exposes `/metrics`, `/chaos/fail`
 - Notification hub now:
   - validates token from existing `auth_tokens` table
-  - websocket endpoint `GET /ws?token=...`
+  - websocket endpoints `GET /ws?token=...` and `GET /ws/orders/{order_id}?token=...`
   - consumes `order.status` and pushes live events
   - exposes `/metrics`, `/chaos/fail`
 

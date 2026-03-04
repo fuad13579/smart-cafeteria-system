@@ -13,7 +13,7 @@ from pydantic import BaseModel
 
 app = FastAPI()
 
-active_sockets: set[WebSocket] = set()
+active_sockets: dict[WebSocket, str | None] = {}
 loop_ref: dict[str, asyncio.AbstractEventLoop | None] = {"loop": None}
 worker_state = {"running": True}
 chaos_state = {"enabled": False, "mode": "error"}
@@ -63,16 +63,38 @@ def _token_valid(token: str) -> bool:
 
 
 async def _broadcast(payload: dict[str, Any]) -> None:
+    order_id = str(payload.get("order_id") or "")
     dead: list[WebSocket] = []
-    for ws in list(active_sockets):
+    for ws, order_filter in list(active_sockets.items()):
+        if order_filter and order_filter != order_id:
+            continue
         try:
             await ws.send_json(payload)
         except Exception:
             metrics["push_failures_total"] += 1
             dead.append(ws)
     for ws in dead:
-        active_sockets.discard(ws)
+        active_sockets.pop(ws, None)
     metrics["connected_clients"] = len(active_sockets)
+
+
+async def _serve_socket(websocket: WebSocket, token: str, order_filter: str | None = None):
+    if not _token_valid(token):
+        await websocket.close(code=1008)
+        return
+
+    await websocket.accept()
+    active_sockets[websocket] = order_filter
+    metrics["connected_clients"] = len(active_sockets)
+
+    try:
+        while True:
+            await websocket.receive_text()
+    except WebSocketDisconnect:
+        pass
+    finally:
+        active_sockets.pop(websocket, None)
+        metrics["connected_clients"] = len(active_sockets)
 
 
 def _consume_status_loop() -> None:
@@ -148,19 +170,9 @@ def chaos_fail(payload: ChaosRequest):
 
 @app.websocket("/ws")
 async def ws_status(websocket: WebSocket, token: str = Query(default="")):
-    if not _token_valid(token):
-        await websocket.close(code=1008)
-        return
+    await _serve_socket(websocket, token, order_filter=None)
 
-    await websocket.accept()
-    active_sockets.add(websocket)
-    metrics["connected_clients"] = len(active_sockets)
 
-    try:
-        while True:
-            await websocket.receive_text()
-    except WebSocketDisconnect:
-        pass
-    finally:
-        active_sockets.discard(websocket)
-        metrics["connected_clients"] = len(active_sockets)
+@app.websocket("/ws/orders/{order_id}")
+async def ws_order_status(order_id: str, websocket: WebSocket, token: str = Query(default="")):
+    await _serve_socket(websocket, token, order_filter=order_id)

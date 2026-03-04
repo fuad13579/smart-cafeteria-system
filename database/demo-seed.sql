@@ -1,9 +1,9 @@
 INSERT INTO students (student_id, full_name, password, account_balance, is_active)
 VALUES
-    ('240041246', 'Fuad Bin Sattar', 'pass123', 1500, TRUE),
-    ('240041248', 'Mahrus Shams', 'pass 246', 1500, TRUE),
-    ('240041250', 'Shahriar Hasnat', 'pass 369', 1500, TRUE),
-    ('admin-demo', 'Demo Admin', 'admin-pass', 5000, TRUE)
+    ('240041246', 'Fuad Bin Sattar', '$2b$12$fN1enJXGmcFGiaDk7SJNeO42qd4WUnsw2KCZdrCT3QmDbL2ItMyjO', 1500, TRUE),
+    ('240041248', 'Mahrus Shams', '$2b$12$0aI28a4URPLvsefpffqnD.zwukxWb.T16rXCrunH8U7uX/buvGWFK', 1500, TRUE),
+    ('240041250', 'Shahriar Hasnat', '$2b$12$sBbbQdPb.XQDWhteSWhebe1MZq64BUyfEnYYZjCVP5vUboiECL5MC', 1500, TRUE),
+    ('admin-demo', 'Demo Admin', '$2b$12$BLpqza7rxEUzMWchTrJpJe8QYTJERLiXnK6sN/kQCJl2aSe9gS50u', 5000, TRUE)
 ON CONFLICT (student_id) DO UPDATE
 SET full_name = EXCLUDED.full_name,
     password = EXCLUDED.password,

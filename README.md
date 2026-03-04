@@ -184,6 +184,10 @@ Student flow:
 Transaction behavior:
 - `bKash` / `Nagad` in demo mode: completes immediately (or near-immediate demo success), balance updates.
 - `Bank`: created as `PENDING` and waits for admin review.
+- Mock payment provider APIs are exposed by `payment-service` on:
+  - `POST /wallet/topups/mock`
+  - `POST /wallet/webhook/{provider}`
+  - `GET /wallet/topups/mock/{topup_id}`
 
 Admin bank verification:
 1. Sign in as admin (`username:-admin-demo` / `password:-admin-pass`).

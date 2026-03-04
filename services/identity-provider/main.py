@@ -2,6 +2,7 @@ import os
 import time
 from datetime import datetime, timedelta, timezone
 
+import bcrypt
 from fastapi import FastAPI, HTTPException
 from fastapi import Header
 from pydantic import BaseModel
@@ -84,6 +85,39 @@ def _ensure_students_schema() -> None:
             conn.commit()
 
 
+def _looks_like_bcrypt_hash(value: str) -> bool:
+    return value.startswith("$2a$") or value.startswith("$2b$") or value.startswith("$2y$")
+
+
+def _hash_password(password: str) -> str:
+    return bcrypt.hashpw(password.encode("utf-8"), bcrypt.gensalt()).decode("utf-8")
+
+
+def _verify_password(plain_password: str, stored_hash: str) -> bool:
+    if not _looks_like_bcrypt_hash(stored_hash):
+        return False
+    try:
+        return bcrypt.checkpw(plain_password.encode("utf-8"), stored_hash.encode("utf-8"))
+    except ValueError:
+        return False
+
+
+def _upgrade_legacy_password_hashes() -> None:
+    with _db_conn() as conn:
+        with conn.cursor() as cur:
+            cur.execute("SELECT student_id, password FROM students")
+            rows = cur.fetchall()
+            for student_id, raw_password in rows:
+                password_value = str(raw_password or "")
+                if _looks_like_bcrypt_hash(password_value):
+                    continue
+                cur.execute(
+                    "UPDATE students SET password = %s WHERE student_id = %s",
+                    (_hash_password(password_value), student_id),
+                )
+            conn.commit()
+
+
 def _jwt_secret() -> str:
     return os.getenv("JWT_SECRET", "dev-only-change-me")
 
@@ -127,6 +161,12 @@ def _resolve_role(student_id: str) -> str:
     return "admin" if student_id in admins else "student"
 
 
+@app.on_event("startup")
+def on_startup():
+    _ensure_students_schema()
+    _upgrade_legacy_password_hashes()
+
+
 @app.get("/health")
 def health():
     _should_fail()
@@ -144,15 +184,17 @@ def health():
 def login(payload: LoginRequest):
     _should_fail()
     metrics["login_total"] += 1
-    query = """
-        SELECT student_id, full_name, account_balance
-        FROM students
-        WHERE student_id = %s AND password = %s AND is_active = TRUE
-    """
 
     with _db_conn() as conn:
         with conn.cursor() as cur:
-            cur.execute(query, (payload.student_id.strip(), payload.password))
+            cur.execute(
+                """
+                SELECT student_id, password
+                FROM students
+                WHERE student_id = %s AND is_active = TRUE
+                """,
+                (payload.student_id.strip(),),
+            )
             row = cur.fetchone()
             if not row:
                 metrics["login_failed_total"] += 1
@@ -161,7 +203,14 @@ def login(payload: LoginRequest):
                     detail={"message": "Invalid student ID or password", "error": "Unauthorized"},
                 )
 
-            student_id, _, _ = row
+            student_id, password_hash = row
+            if not _verify_password(payload.password, str(password_hash or "")):
+                metrics["login_failed_total"] += 1
+                raise HTTPException(
+                    status_code=401,
+                    detail={"message": "Invalid student ID or password", "error": "Unauthorized"},
+                )
+
             token = _create_access_token(student_id)
             cur.execute(
                 "INSERT INTO auth_tokens(token, student_id) VALUES (%s, %s)",
@@ -211,7 +260,7 @@ def register(payload: RegisterRequest):
                 INSERT INTO students(student_id, full_name, email, password, account_balance, is_active)
                 VALUES (%s, %s, %s, %s, 0, TRUE)
                 """,
-                (student_id, full_name, email, password),
+                (student_id, full_name, email, _hash_password(password)),
             )
             token = _create_access_token(student_id)
             cur.execute(

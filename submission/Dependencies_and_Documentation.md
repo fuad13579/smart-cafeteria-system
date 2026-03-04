@@ -20,6 +20,7 @@
 - uvicorn==0.27.1
 - psycopg[binary]==3.1.18
 - PyJWT==2.9.0
+- bcrypt==4.1.3
 
 ### order-gateway
 - fastapi==0.110.0
@@ -114,5 +115,4 @@ AI-assisted tools were used for support in coding and documentation workflows. A
 - Latest commit used: https://github.com/fuad13579/smart-cafeteria-system/commit/facb4f613c7bc35168f09d4527d60f99cc9179a7
 - CI file: https://github.com/fuad13579/smart-cafeteria-system/blob/main/.github/workflows/ci.yml
 - Compose: https://github.com/fuad13579/smart-cafeteria-system/blob/main/infra/docker-compose.yml
-
 

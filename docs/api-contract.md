@@ -101,6 +101,74 @@ Failure:
 - `404`: `{ "message": "Order not found", "error": "Not Found" }`
 - `401`: `{ "message": "Unauthorized", "error": "Unauthorized" }`
 
+## Payment Service (Mock Wallet Endpoints)
+Base URL (payment-service): `http://localhost:8006`
+
+### POST `/wallet/topups/mock`
+Request:
+```json
+{
+  "student_id": "240041246",
+  "amount": 500,
+  "method": "BKASH",
+  "mode": "demo",
+  "details": {
+    "reference_id": "TOPUP-DEMO-001"
+  },
+  "idempotency_key": "client-key-123"
+}
+```
+Success `200`:
+```json
+{
+  "ok": true,
+  "replayed": false,
+  "topup": {
+    "topup_id": "topup-abc123",
+    "amount": 500,
+    "method": "BKASH",
+    "status": "COMPLETED|PENDING",
+    "reference_id": "TOPUP-DEMO-001",
+    "redirect_url": null
+  }
+}
+```
+
+### POST `/wallet/webhook/{provider}`
+`provider`: `bkash|nagad|bank`
+
+Request:
+```json
+{
+  "topup_id": "topup-abc123",
+  "status": "SUCCESS",
+  "provider_txn_id": "pg-789"
+}
+```
+Success `200`:
+```json
+{
+  "ok": true,
+  "already_processed": false,
+  "topup_id": "topup-abc123",
+  "status": "SUCCESS"
+}
+```
+
+### GET `/wallet/topups/mock/{topup_id}`
+Success `200`:
+```json
+{
+  "topup": {
+    "topup_id": "topup-abc123",
+    "student_id": "240041246",
+    "amount": 500,
+    "method": "BKASH",
+    "status": "COMPLETED"
+  }
+}
+```
+
 ## Admin (Web API)
 Base URL: `http://localhost:3000`
 
@@ -160,14 +228,20 @@ Success `200`:
 }
 ```
 
-## WebSocket Contract (planned)
-### `GET /ws/orders/{order_id}`
+## WebSocket Contract
+Notification hub base URL: `ws://localhost:8005`
+
+Supported endpoints:
+- `GET /ws?token=<access_token>`: stream all order-status events for the authenticated user session.
+- `GET /ws/orders/{order_id}?token=<access_token>`: stream only a single order's events.
+
+### Server event payload
 Server event payload:
 ```json
 {
   "order_id": "uuid-or-string",
-  "status": "QUEUED|IN_PROGRESS|READY|COMPLETED|CANCELLED",
+  "to_status": "QUEUED|IN_PROGRESS|READY|COMPLETED|CANCELLED",
   "eta_minutes": 8,
-  "at": "2026-02-28T10:00:00Z"
+  "occurred_at": "2026-02-28T10:00:00Z"
 }
 ```

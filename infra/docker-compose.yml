@@ -9,7 +9,8 @@ services:
       - "5432:5432"
     volumes:
       - postgres_data:/var/lib/postgresql/data
-      - ../database:/docker-entrypoint-initdb.d:ro
+      - ../database/001_schema.sql:/docker-entrypoint-initdb.d/001_schema.sql:ro
+      - ../database/002_seed.sql:/docker-entrypoint-initdb.d/002_seed.sql:ro
     networks: [backend]
     restart: unless-stopped
     healthcheck:
