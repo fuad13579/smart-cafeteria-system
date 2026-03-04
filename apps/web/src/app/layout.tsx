@@ -18,7 +18,7 @@ export default function RootLayout({ children }: { children: React.ReactNode }) 
           <ToastProvider>
             <AuthBootstrap />
             <Header />
-            <main className="mx-auto w-full max-w-4xl px-4 py-8">{children}</main>
+            <main className="mx-auto w-full max-w-4xl px-4 py-8 pb-24 sm:pb-8">{children}</main>
           </ToastProvider>
         </ThemeProvider>
       </body>

@@ -6,6 +6,7 @@ import { useEffect, useState } from "react";
 import { useTheme } from "next-themes";
 import { getCart, getUser, type CartLine, type User } from "@/lib/storage";
 import { usePathname } from "next/navigation";
+import { MobileTabBar } from "@/components/MobileTabBar";
 
 function NavLink({ href, label }: { href: string; label: string }) {
   const pathname = usePathname();
@@ -75,7 +76,7 @@ export function Header() {
           </div>
         </Link>
 
-        <nav className="flex items-center gap-2">
+        <nav className="hidden items-center gap-2 sm:flex">
           <NavLink href="/menu" label="Menu" />
           <NavLink href="/cart" label={`Cart (${cartCount})`} />
           <NavLink href="/wallet" label="Wallet" />
@@ -93,6 +94,7 @@ export function Header() {
           </button>
         </nav>
       </div>
+      <MobileTabBar cartCount={cartCount} />
     </header>
   );
 }
