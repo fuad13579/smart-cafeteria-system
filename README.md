@@ -186,7 +186,7 @@ Transaction behavior:
 - `Bank`: created as `PENDING` and waits for admin review.
 
 Admin bank verification:
-1. Sign in as admin (`admin-demo` / `admin-pass`).
+1. Sign in as admin (`username:-admin-demo` / `password:-admin-pass`).
 2. Open `http://localhost:3000/admin`.
 3. In **Bank Top-up Verification Queue**, approve or reject pending bank top-ups.
 
