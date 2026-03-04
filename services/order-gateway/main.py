@@ -824,6 +824,26 @@ def _reserve_item(order_id: str, item_id: str, qty: int) -> None:
     _invalidate_stock_cache(item_id)
 
 
+def _confirm_order_reservations(order_id: str) -> None:
+    payload = {"order_id": order_id}
+    try:
+        with httpx.Client(timeout=2.0) as client:
+            resp = client.post(f"{_stock_url()}/stock/confirm", json=payload)
+    except Exception as exc:
+        raise HTTPException(status_code=503, detail=f"Stock service unavailable: {exc}") from exc
+
+    if resp.status_code == 200:
+        return
+    if resp.status_code == 409:
+        detail = resp.json().get("detail", "Reservation already released")
+        raise HTTPException(status_code=409, detail=detail)
+    if resp.status_code == 404:
+        raise HTTPException(status_code=409, detail="Reservation not found")
+    if resp.status_code >= 500:
+        raise HTTPException(status_code=503, detail="Stock service failure")
+    raise HTTPException(status_code=503, detail="Unexpected stock confirmation response")
+
+
 def _invalidate_stock_cache(item_id: str) -> None:
     _cache_del_key(_stock_zero_cache_key(item_id))
 
@@ -2853,6 +2873,15 @@ def create_order(
             amount=total_amount,
             method=payment_method,
         )
+    except Exception:
+        _mark_order_cancelled(order_id)
+        if reservations_done:
+            _release_order_reservations(order_id)
+        raise
+
+    try:
+        if reservations_done:
+            _confirm_order_reservations(order_id)
     except Exception:
         _mark_order_cancelled(order_id)
         if reservations_done:

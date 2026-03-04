@@ -1,5 +1,6 @@
 import json
 import os
+import threading
 import time
 from typing import Any
 
@@ -16,9 +17,31 @@ chaos_state = {"enabled": False, "mode": "error"}
 metrics: dict[str, float] = {
     "reserve_total": 0,
     "reserve_failed_total": 0,
+    "confirm_total": 0,
+    "confirm_failed_total": 0,
     "release_total": 0,
     "release_failed_total": 0,
+    "ttl_released_total": 0,
 }
+reaper_state = {"running": True}
+
+
+def _reservation_ttl_seconds() -> int:
+    raw = os.getenv("RESERVATION_TTL_SECONDS", "300")
+    try:
+        value = int(raw)
+        return value if value > 0 else 300
+    except ValueError:
+        return 300
+
+
+def _reservation_reaper_interval_seconds() -> int:
+    raw = os.getenv("RESERVATION_REAPER_INTERVAL_SECONDS", "5")
+    try:
+        value = int(raw)
+        return value if value > 0 else 5
+    except ValueError:
+        return 5
 
 
 def _db_conn():
@@ -83,9 +106,93 @@ class ReleaseRequest(BaseModel):
     order_id: str
 
 
+class ConfirmRequest(BaseModel):
+    order_id: str
+
+
 class ChaosRequest(BaseModel):
     enabled: bool
     mode: str = "error"
+
+
+def _ensure_stock_reservation_schema() -> None:
+    with _db_conn() as conn:
+        with conn.cursor() as cur:
+            cur.execute("ALTER TABLE stock_reservations ADD COLUMN IF NOT EXISTS confirmed_at TIMESTAMPTZ")
+            cur.execute(
+                """
+                CREATE INDEX IF NOT EXISTS idx_stock_reservations_status_confirmed_created
+                ON stock_reservations(status, confirmed_at, created_at)
+                """
+            )
+            conn.commit()
+
+
+def _release_expired_reservations_once() -> int:
+    ttl_seconds = _reservation_ttl_seconds()
+    released = 0
+    with _db_conn() as conn:
+        with conn.cursor() as cur:
+            cur.execute(
+                """
+                SELECT id, item_id, qty
+                FROM stock_reservations
+                WHERE status = 'RESERVED'
+                  AND confirmed_at IS NULL
+                  AND created_at <= NOW() - (%s || ' seconds')::interval
+                FOR UPDATE SKIP LOCKED
+                LIMIT 100
+                """,
+                (ttl_seconds,),
+            )
+            rows = cur.fetchall()
+            for reservation_id, item_id, qty in rows:
+                cur.execute(
+                    """
+                    UPDATE menu_items
+                    SET stock_quantity = stock_quantity + %s,
+                        available = TRUE
+                    WHERE id = %s
+                    """,
+                    (qty, item_id),
+                )
+                cur.execute(
+                    """
+                    UPDATE stock_reservations
+                    SET status = 'RELEASED'
+                    WHERE id = %s
+                      AND status = 'RESERVED'
+                      AND confirmed_at IS NULL
+                    """,
+                    (reservation_id,),
+                )
+                _publish_cache_invalidation("stock.changed", item_id=str(item_id))
+                released += 1
+            conn.commit()
+    return released
+
+
+def _reservation_reaper_loop() -> None:
+    interval = _reservation_reaper_interval_seconds()
+    while reaper_state["running"]:
+        try:
+            released = _release_expired_reservations_once()
+            if released > 0:
+                metrics["ttl_released_total"] += released
+        except Exception:
+            pass
+        time.sleep(interval)
+
+
+@app.on_event("startup")
+def on_startup() -> None:
+    _ensure_stock_reservation_schema()
+    threading.Thread(target=_reservation_reaper_loop, daemon=True).start()
+
+
+@app.on_event("shutdown")
+def on_shutdown() -> None:
+    reaper_state["running"] = False
 
 
 @app.get("/health")
@@ -115,8 +222,11 @@ def get_metrics():
     return {
         "reserve_total": metrics["reserve_total"],
         "reserve_failed_total": metrics["reserve_failed_total"],
+        "confirm_total": metrics["confirm_total"],
+        "confirm_failed_total": metrics["confirm_failed_total"],
         "release_total": metrics["release_total"],
         "release_failed_total": metrics["release_failed_total"],
+        "ttl_released_total": metrics["ttl_released_total"],
     }
 
 
@@ -172,7 +282,7 @@ def reserve_stock(payload: ReserveRequest):
                 # Idempotency: same order+item repeated should not deduct again.
                 cur.execute(
                     """
-                    SELECT qty, status
+                    SELECT qty, status, confirmed_at
                     FROM stock_reservations
                     WHERE order_id = %s AND item_id = %s
                     """,
@@ -180,7 +290,7 @@ def reserve_stock(payload: ReserveRequest):
                 )
                 reservation = cur.fetchone()
                 if reservation:
-                    reserved_qty, status = reservation
+                    reserved_qty, status, confirmed_at = reservation
                     if status == "RESERVED":
                         if int(reserved_qty) != payload.qty:
                             metrics["reserve_failed_total"] += 1
@@ -188,6 +298,7 @@ def reserve_stock(payload: ReserveRequest):
                         return {
                             "reserved": True,
                             "already_reserved": True,
+                            "already_confirmed": confirmed_at is not None,
                             "order_id": payload.order_id,
                             "item_id": payload.item_id,
                             "qty": payload.qty,
@@ -236,6 +347,61 @@ def reserve_stock(payload: ReserveRequest):
                 pass
 
 
+@app.post("/stock/confirm")
+def confirm_stock(payload: ConfirmRequest):
+    _should_fail()
+    metrics["confirm_total"] += 1
+
+    with _db_conn() as conn:
+        with conn.cursor() as cur:
+            cur.execute(
+                """
+                SELECT
+                  COUNT(*) FILTER (WHERE status = 'RESERVED' AND confirmed_at IS NULL) AS pending_count,
+                  COUNT(*) FILTER (WHERE status = 'RESERVED' AND confirmed_at IS NOT NULL) AS confirmed_count,
+                  COUNT(*) FILTER (WHERE status = 'RELEASED') AS released_count
+                FROM stock_reservations
+                WHERE order_id = %s
+                """,
+                (payload.order_id,),
+            )
+            row = cur.fetchone()
+            pending_count = int(row[0] or 0) if row else 0
+            confirmed_count = int(row[1] or 0) if row else 0
+            released_count = int(row[2] or 0) if row else 0
+
+            if pending_count == 0:
+                if confirmed_count > 0:
+                    return {
+                        "confirmed": True,
+                        "already_confirmed": True,
+                        "order_id": payload.order_id,
+                    }
+                if released_count > 0:
+                    metrics["confirm_failed_total"] += 1
+                    raise HTTPException(status_code=409, detail="Reservation already released")
+                metrics["confirm_failed_total"] += 1
+                raise HTTPException(status_code=404, detail="Reservation not found")
+
+            cur.execute(
+                """
+                UPDATE stock_reservations
+                SET confirmed_at = NOW()
+                WHERE order_id = %s
+                  AND status = 'RESERVED'
+                  AND confirmed_at IS NULL
+                """,
+                (payload.order_id,),
+            )
+            conn.commit()
+
+    return {
+        "confirmed": True,
+        "already_confirmed": False,
+        "order_id": payload.order_id,
+    }
+
+
 @app.post("/stock/release")
 def release_stock(payload: ReleaseRequest):
     _should_fail()
@@ -247,7 +413,9 @@ def release_stock(payload: ReleaseRequest):
                 """
                 SELECT item_id, qty
                 FROM stock_reservations
-                WHERE order_id = %s AND status = 'RESERVED'
+                WHERE order_id = %s
+                  AND status = 'RESERVED'
+                  AND confirmed_at IS NULL
                 FOR UPDATE
                 """,
                 (payload.order_id,),
@@ -270,7 +438,13 @@ def release_stock(payload: ReleaseRequest):
                 _publish_cache_invalidation("stock.changed", item_id=str(item_id))
 
             cur.execute(
-                "UPDATE stock_reservations SET status = 'RELEASED' WHERE order_id = %s AND status = 'RESERVED'",
+                """
+                UPDATE stock_reservations
+                SET status = 'RELEASED'
+                WHERE order_id = %s
+                  AND status = 'RESERVED'
+                  AND confirmed_at IS NULL
+                """,
                 (payload.order_id,),
             )
             conn.commit()
