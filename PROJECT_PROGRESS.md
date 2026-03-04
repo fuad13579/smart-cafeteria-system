@@ -55,7 +55,6 @@ Last updated: 2026-02-28
 4. Performance sanity test for target traffic profile.
 
 ## Quick Update Template
-Use this to append future updates:
 
 ```md
 ### YYYY-MM-DD
