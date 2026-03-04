@@ -33,7 +33,7 @@ export function MobileTabBar({ cartCount }: { cartCount: number }) {
       <div className="mx-auto flex max-w-4xl px-2">
         <Tab href="/menu" label="Menu" />
         <Tab href="/cart" label="Cart" />
-        <Tab href="/orders/test" label="Orders" />
+        <Tab href="/orders" label="Orders" />
         <Tab href="/login" label="Login" />
       </div>
     </div>

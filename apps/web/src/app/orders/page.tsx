@@ -59,8 +59,14 @@ export default function OrdersPage() {
       try {
         const res = await getMyOrders();
         if (cancelled) return;
+        const nextOrders = Array.isArray(res?.orders) ? res.orders : [];
+        const sorted = [...nextOrders].sort((a, b) => {
+          const aTs = a.created_at ? new Date(a.created_at).getTime() : 0;
+          const bTs = b.created_at ? new Date(b.created_at).getTime() : 0;
+          return bTs - aTs;
+        });
         setErr(null);
-        setOrders(Array.isArray(res?.orders) ? res.orders : []);
+        setOrders(sorted);
       } catch (e: any) {
         if (cancelled) return;
         setErr(e?.message ?? "Failed to load your orders");
@@ -159,32 +165,42 @@ export default function OrdersPage() {
         </div>
       )}
 
-      <div className="mt-4 flex items-center justify-between rounded-xl border border-zinc-200 bg-zinc-50 px-3 py-2 dark:border-zinc-900 dark:bg-zinc-950">
-        <div className="flex items-center gap-2">
-          <select
-            defaultValue="all"
-            onChange={(e) => {
-              applySelectionAction(e.target.value);
-            }}
-            className="rounded-lg border border-zinc-300 bg-white px-2 py-1 text-xs text-zinc-800 dark:border-zinc-700 dark:bg-zinc-900 dark:text-zinc-200"
-          >
-            <option value="all">Select all</option>
-            <option value="none">Clear selection</option>
-          </select>
-          <div className="text-xs text-zinc-600 dark:text-zinc-400">
-            Selected: {selectedIds.length}
+      {orders.length > 0 && (
+        <div className="mt-4 flex items-center justify-between rounded-xl border border-zinc-200 bg-zinc-50 px-3 py-2 dark:border-zinc-900 dark:bg-zinc-950">
+          <div className="flex items-center gap-2">
+            <select
+              defaultValue="none"
+              onChange={(e) => {
+                applySelectionAction(e.target.value);
+              }}
+              className="rounded-lg border border-zinc-300 bg-white px-2 py-1 text-xs text-zinc-800 dark:border-zinc-700 dark:bg-zinc-900 dark:text-zinc-200"
+            >
+              <option value="none">Clear selection</option>
+              <option value="all">Select all</option>
+            </select>
+            <div className="text-xs text-zinc-600 dark:text-zinc-400">
+              Selected: {selectedIds.length}
+            </div>
           </div>
+          <button
+            onClick={onDeleteSelected}
+            disabled={deleting || selectedIds.length === 0}
+            className="rounded-lg border border-red-300 px-3 py-1 text-xs text-red-700 hover:bg-red-50 disabled:opacity-60 dark:border-red-900 dark:text-red-300 dark:hover:bg-red-950/40"
+          >
+            {deleting ? "Deleting…" : "Delete"}
+          </button>
         </div>
-        <button
-          onClick={onDeleteSelected}
-          disabled={deleting || selectedIds.length === 0}
-          className="rounded-lg border border-red-300 px-3 py-1 text-xs text-red-700 hover:bg-red-50 disabled:opacity-60 dark:border-red-900 dark:text-red-300 dark:hover:bg-red-950/40"
-        >
-          {deleting ? "Deleting…" : "Delete"}
-        </button>
-      </div>
+      )}
 
       <div className="mt-6 space-y-3">
+        {!loading && !err && orders.length === 0 && (
+          <div className="rounded-2xl border border-zinc-200 bg-zinc-50 p-5 text-sm text-zinc-700 dark:border-zinc-900 dark:bg-zinc-950 dark:text-zinc-300">
+            <p>You have no orders yet.</p>
+            <Link href="/menu" className="mt-2 inline-block font-medium text-zinc-900 hover:underline dark:text-zinc-100">
+              Browse menu
+            </Link>
+          </div>
+        )}
         {orders.map((o) => (
           <div key={o.order_id} className="rounded-2xl border border-zinc-200 bg-zinc-50 p-4 dark:border-zinc-900 dark:bg-zinc-950">
             <div className="flex items-center justify-between gap-3">
