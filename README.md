@@ -1,203 +1,384 @@
 # Smart Cafeteria System (DevSprint 2026)
 
-A fault-tolerant, microservices-based university cafeteria ordering system designed to survive the Ramadan rush: fast API ack, safe inventory under burst traffic, and real-time order status updates.
+Smart Cafeteria System is a fault-tolerant microservices platform built for Ramadan rush-hour cafeteria traffic. It prioritizes fast order acknowledgment, strict stock safety under burst load, real-time order visibility, and graceful behavior during partial service failures.
 
-## Why this exists
-During peak Iftar rush, monolith systems choke on locks/timeouts and partial failures. This project splits the system into isolated microservices so that failures (for example, notification) do not stall the full order flow.
+## 1) Architecture
 
----
+All core services run in separate containers and communicate over HTTP + message queue.
 
-## Architecture (Required Services)
-Each service is containerized and communicates over the network.
+```mermaid
+flowchart LR
+    U[Web/Mobile UI]
+    G[Order Gateway<br/>:8002]
+    I[Identity Provider<br/>:8001]
+    S[Stock Service<br/>:8003]
+    K[Kitchen Queue/Worker<br/>:8004]
+    N[Notification Hub<br/>:8005]
+    P[(PostgreSQL<br/>:5432)]
+    R[(Redis Cache<br/>:6379)]
+    Q[(RabbitMQ<br/>:5672)]
+    A[Admin Dashboard]
 
-| Service | Responsibility | Key rulebook requirement |
+    U -->|Login / Menu / Orders| G
+    A -->|Health / Metrics / Chaos| G
+    G -->|Auth verify| I
+    G -->|Cache-first stock check| R
+    G -->|Reserve/Confirm/Release| S
+    S --> P
+    G --> P
+    G -->|enqueue kitchen.jobs| Q
+    K -->|consume kitchen.jobs| Q
+    K --> P
+    K -->|publish order.status| Q
+    N -->|consume order.status| Q
+    N -->|WebSocket push| U
+```
+
+## 2) Required Services and Responsibilities
+
+| Service | Purpose | Key Endpoints |
 |---|---|---|
-| **Identity Provider** | AuthN/AuthZ | Single source of truth; issues secure **JWT** tokens. |
-| **Order Gateway** | API entry point | **Mandatory token validation** + **cache stock check before DB** to reduce load. |
-| **Stock Service** | Inventory source of truth | **Concurrency control** (for example, optimistic locking) to prevent overselling. |
-| **Kitchen Queue** | Async processing | **Ack <2s**, decouple ack from cooking (simulate 3–7s). |
-| **Notification Hub** | Real-time updates | Push status updates to UI, no client polling in real mode. |
+| Identity Provider | AuthN/AuthZ, JWT issuer, single source of truth for identity | `POST /login`, `GET /verify`, `GET /health`, `GET /metrics` |
+| Order Gateway | API entry point, mandatory JWT validation, cache-first stock gate before stock/DB-heavy flow | `POST /api/login`, `GET /api/menu`, `POST /api/orders`, `GET /api/orders/{id}`, `GET /health`, `GET /metrics`, `GET /api/admin/metrics` |
+| Stock Service | Inventory source of truth, oversell prevention with concurrency control (optimistic locking/versioning strategy), stock never negative | `GET /stock/{item_id}`, `POST /stock/reserve`, `POST /stock/confirm`, `POST /stock/release`, `GET /health`, `GET /metrics` |
+| Kitchen Queue/Worker | Async order processing, decoupled from client ACK path | `GET /health`, `GET /metrics` |
+| Notification Hub | Real-time order status push to clients (WebSocket), no polling in judged flow | `WS /ws?token=...`, `WS /ws/orders/{order_id}?token=...`, `GET /health`, `GET /metrics` |
 
-Judge requirement: the whole system must run via a single `docker compose up` command.
+## 3) End-to-End Flow
 
----
+### A. Login -> JWT
+1. Client sends credentials to `POST /api/login` (gateway).
+2. Gateway delegates auth to Identity Provider.
+3. Identity Provider returns signed JWT.
+4. Gateway returns token + user profile.
 
-## Core Engineering Requirements (Rulebook Mapping)
+### B. Place Order -> ACK under 2s
+1. Client calls `POST /api/orders` with:
+   - `Authorization: Bearer <token>`
+   - `Idempotency-Key: <client-generated-key>`
+2. Gateway validates JWT (mandatory).
+3. Gateway performs cache-first stock gate (fast reject on known zero stock).
+4. Gateway reserves stock through Stock Service (concurrency-safe, non-negative invariant).
+5. Gateway enqueues kitchen job and immediately acknowledges order (target ACK <2s).
 
-### Security & Authentication
-- Token handshake: client authenticates with Identity Provider to receive a secure token.
-- Protected routes: Gateway rejects missing/invalid bearer token with **401**.
+### C. Kitchen + Real-Time Tracking
+1. Kitchen worker consumes `kitchen.jobs` and simulates prep (3-7 seconds).
+2. Status changes are published to `order.status`.
+3. Notification Hub pushes updates via WebSocket to the UI tracker in real time.
+4. UI order tracker updates without polling.
 
-### Resilience & Fault Tolerance
-- Idempotency: handle partial failures (for example, stock deducted but response lost).
-- Async processing: Kitchen decouples acknowledgment from execution.
+## 4) Local Run Guide
 
-### Performance & Caching
-- Cache-first stock check at gateway; if cache says **zero stock**, reject instantly to protect DB.
+### Prerequisites
+- Docker + Docker Compose
+- Node.js 20+
+- npm
 
-### Observability & Monitoring
-Each service exposes:
-- `GET /health`: `200` if healthy, `503` if a dependency is down.
-- `GET /metrics`: machine-readable totals, failure counts, avg latency.
-
-### CI/CD Validation
-- Unit tests: order validation + stock deduction logic.
-- Pipeline: every push to `main` runs checks; build fails on test failure.
-
-### UI Requirements
-Student journey (SPA):
-1. Login (token)
-2. Place order
-3. Live status: Pending -> Stock Verified -> In Kitchen -> Ready
-
-Admin dashboard:
-- Health grid (Green/Red per service)
-- Live metrics (latency + throughput)
-- Chaos toggle to kill a service and observe partial failure handling
-
----
-
-## Quick Start (Localhost)
-Prerequisites: Docker + Docker Compose, Node.js 20+, npm
-
+### Start everything (single command)
 ```bash
-# from repo root
-cd /root/smart-cafeteria-system
-
-# one command: build + run full backend stack
 docker compose -f infra/docker-compose.yml up -d --build
+```
 
-# install frontend dependencies (first time only)
+### Optional: run web/mobile clients
+```bash
 npm --prefix apps/web install
 npm --prefix apps/mobile install
-
-# web dev
 npm --prefix apps/web run dev
-
-# mobile dev
 npm --prefix apps/mobile start
 ```
 
-Helpful commands:
-
+### Quick verification with curl
 ```bash
-make up-infra
-make up-all
-make ps
-make logs
-make down
-make db-reset
-make demo-seed
-make smoke-test
+curl -i http://localhost:8001/health
+curl -i http://localhost:8002/health
+curl -i http://localhost:8003/health
+curl -i http://localhost:8004/health
+curl -i http://localhost:8005/health
 ```
 
-## Service Ports
-| Service | Port |
-|---|---|
-| Web (Next.js) | `3000` |
-| Identity Provider | `8001` |
-| Order Gateway | `8002` |
-| Stock Service | `8003` |
-| Kitchen Queue | `8004` |
-| Notification Hub | `8005` |
-| Payment Service (future/demo scope) | `8006` |
-| Postgres | `5432` |
-| PgBouncer | `6432` |
-| Redis | `6379` |
-| RabbitMQ AMQP | `5672` |
-| RabbitMQ Management UI | `15672` |
+## Configuration
 
-## Admin Page Access
-1. Start the stack and web app:
+### Frontend environment
+Web (`apps/web/.env.local`)
 ```bash
-docker compose -f infra/docker-compose.yml up -d --build
-npm --prefix apps/web run dev
-```
-2. Open `http://localhost:3000/login`
-3. Sign in with admin demo account:
-- Student ID: `admin-demo`
-- Password: `admin-pass`
-4. Open `http://localhost:3000/admin`
-
-Notes:
-- The Admin link appears in the top navbar only for users with admin role.
-- If you use mock mode for web, the same admin credentials work there as well.
-
-## Sign Up Integration (Web + Mobile + Backend)
-New student account creation is integrated across frontend and backend.
-
-What is implemented:
-- Web signup form on `/login` (toggle: Sign in / Sign up)
-- Mobile signup flow on login screen
-- Backend registration endpoint with database insert
-- Gateway proxy for registration in API path
-
-Registration fields:
-- Full Name
-- Student ID
-- Email
-- Password
-
-API route:
-- `POST /api/auth/register`
-
-Expected behavior:
-- On successful signup, user is created in the `students` table.
-- Response returns auth session payload (token + user).
-- Frontend stores user session and continues as logged-in user.
-
-Quick test:
-1. Open web login page: `http://localhost:3000/login`
-2. Switch to `Sign up`
-3. Create a new account with unique student ID/email
-4. Confirm login state appears after submit
-
-## Environment Setup
-Frontend supports `mock` and `real` API modes.
-
-Web (`apps/web/.env.local`):
-```bash
-NEXT_PUBLIC_API_MODE=mock
+NEXT_PUBLIC_API_MODE=real
 NEXT_PUBLIC_API_BASE_URL=http://localhost:8002
 NEXT_PUBLIC_API_PREFIX=/api
+NEXT_PUBLIC_NOTIFICATION_WS_URL=ws://localhost:8005/ws
+ACCESS_COOKIE_NAME=access_token
 ```
 
-Mobile (`apps/mobile/.env`):
+Mobile (`apps/mobile/.env`)
 ```bash
-EXPO_PUBLIC_API_MODE=mock
+EXPO_PUBLIC_API_MODE=real
 EXPO_PUBLIC_API_BASE_URL=http://localhost:8002
 EXPO_PUBLIC_API_PREFIX=/api
+EXPO_PUBLIC_NOTIFICATION_WS_URL=ws://localhost:8005/ws
 ```
 
-Use `real` mode when backend stack is running. Keep `mock` for demo-only frontend runs.
+### Env file locations
+| Scope | File / Location | Notes |
+|---|---|---|
+| Root template | `.env.example` | Example env template committed to repo. |
+| Web app | `apps/web/.env.local` | Next.js client/runtime env values. |
+| Mobile app | `apps/mobile/.env` | Expo public env values. |
+| Backend services | `infra/docker-compose.yml` (`environment:` blocks) | Runtime env is injected per service container. |
+| Service defaults | `services/*/main.py` (`os.getenv(...)`) | Fallback defaults used if env not provided. |
 
-## Demo Accounts
+### Backend/runtime knobs (optional)
+- `RESERVATION_TTL_SECONDS` (stock reservation TTL)
+- `RESERVATION_REAPER_INTERVAL_SECONDS` (stock release worker interval)
+- `ADMIN_HEALTH_CHECKS_JSON` (custom admin health check targets)
+- `JWT_SECRET`, `JWT_EXPIRES_MINUTES` (auth token config)
+
+### CORS configuration
+- Services support CORS origin configuration through `CORS_ALLOWED_ORIGINS`.
+- Local example:
+```bash
+CORS_ALLOWED_ORIGINS=http://localhost:3000,http://127.0.0.1:3000,http://localhost:8081,exp://127.0.0.1:19000
+```
+- Include your deployed frontend origin(s) in production.
+
+### Infrastructure defaults
+- Docker Compose file: `infra/docker-compose.yml`
+- Deterministic DB bootstrap from:
+  - `database/001_schema.sql`
+  - `database/002_seed.sql`
+
+### Deployment note (Vercel)
+- Current Vercel deployment is **frontend-only** (Next.js app).
+- Backend microservices (Identity, Gateway, Stock, Kitchen, Notification, Postgres, Redis, RabbitMQ) are **not** hosted on Vercel and must run separately.
+
+## 5) API Quickstart
+
+### Login
+```bash
+TOKEN=$(curl -s -X POST http://localhost:8002/api/login \
+  -H "Content-Type: application/json" \
+  -d '{"student_id":"240041246","password":"pass123"}' \
+  | python3 -c 'import json,sys; print(json.load(sys.stdin)["access_token"])')
+
+echo "$TOKEN"
+```
+
+### Place order (JWT + Idempotency-Key)
+```bash
+curl -s -X POST http://localhost:8002/api/orders \
+  -H "Authorization: Bearer $TOKEN" \
+  -H "Idempotency-Key: demo-order-001" \
+  -H "Content-Type: application/json" \
+  -d '{"items":[{"id":"1","qty":1}]}'
+```
+
+### Check stock directly
+```bash
+curl -s http://localhost:8003/stock/1
+```
+
+### Real-time tracking (WebSocket)
+Using `wscat`:
+```bash
+npx wscat -c "ws://localhost:8005/ws?token=$TOKEN"
+```
+
+Single-order stream:
+```bash
+npx wscat -c "ws://localhost:8005/ws/orders/<ORDER_ID>?token=$TOKEN"
+```
+
+## 6) Observability
+
+### Health and metrics endpoints
+
+| Service | Health | Metrics |
+|---|---|---|
+| Identity Provider | `GET http://localhost:8001/health` | `GET http://localhost:8001/metrics` |
+| Order Gateway | `GET http://localhost:8002/health` | `GET http://localhost:8002/metrics` |
+| Stock Service | `GET http://localhost:8003/health` | `GET http://localhost:8003/metrics` |
+| Kitchen Queue/Worker | `GET http://localhost:8004/health` | `GET http://localhost:8004/metrics` |
+| Notification Hub | `GET http://localhost:8005/health` | `GET http://localhost:8005/metrics` |
+
+### Metrics meaning (judge-facing)
+- `orders_total` / `orders_failed_total`: throughput and failure ratio.
+- latency metrics (`p50`, `p95`, or avg): response-time behavior.
+- queue depth (`kitchen.jobs`, `order.status`): async backlog pressure.
+- service-specific counters (reserve/confirm/release, push failures, etc.).
+
+## 7) Testing and CI
+
+### Local checks
+```bash
+# End-to-end smoke
+./scripts/smoke-test.sh
+
+# Backend unit/integration (current baseline)
+services/order-gateway/.venv/bin/python -m pytest -q services/order-gateway/tests
+
+# Frontend quality gates
+cd apps/web && npm run lint && npm run build -- --webpack
+cd apps/mobile && npm run lint
+```
+
+### CI contract
+- GitHub Actions (`CI`) runs on every push to `main`.
+- Test or build failure must fail the pipeline.
+- Submission target is green CI on `main`.
+
+## 8) Failure Demo / Chaos Testing
+
+Use admin dashboard chaos controls, API toggles, or direct container stop to simulate failure.
+
+### Example: kill one service container
+```bash
+docker compose -f infra/docker-compose.yml stop notification-hub
+```
+
+Expected behavior:
+- Login, menu, and order placement continue.
+- Kitchen processing continues.
+- Real-time push pauses while notification-hub is down.
+
+Recover:
+```bash
+docker compose -f infra/docker-compose.yml start notification-hub
+```
+
+### Example: fail Stock Service
+```bash
+curl -s -X POST http://localhost:8003/chaos/fail \
+  -H "Content-Type: application/json" \
+  -d '{"enabled":true,"mode":"error"}'
+```
+
+Expected behavior:
+- New order attempts degrade gracefully (controlled failure, no data corruption).
+- Existing services remain alive.
+- Stock never goes negative, no double deduction.
+
+Recover:
+```bash
+curl -s -X POST http://localhost:8003/chaos/fail \
+  -H "Content-Type: application/json" \
+  -d '{"enabled":false,"mode":"error"}'
+```
+
+## 9) Admin Dashboard Requirements Coverage
+
+`/admin` demonstrates:
+- Health grid (green/red by real checks)
+- Live metrics (latency, throughput, queue depth)
+- Chaos toggle (service fail/recover)
+
+## 10) Monorepo Structure
+
+```text
+smart-cafeteria-system/
+  apps/                # Frontend clients (web, mobile)
+  services/            # FastAPI microservices
+    identity-provider/
+    order-gateway/
+    stock-service/
+    kitchen-queue/
+    notification-hub/
+  infra/               # docker-compose and infra configs
+  database/            # deterministic schema + seed SQL
+  docs/                # contracts, demo script, handoff docs
+  scripts/             # health check, smoke test, utilities
+```
+
+## Mobile App (Short Guide)
+
+- What it does: student-facing mobile flow for login, menu browsing, order placement, and order tracking using the same backend APIs.
+- Where the code is: `apps/mobile/` (screens/components under `apps/mobile/src/`).
+- How to run locally:
+```bash
+npm --prefix apps/mobile install
+npm --prefix apps/mobile start
+```
+- Configuration: set API target in `apps/mobile/.env` (see `Configuration` section).
+- Future use: package for Android/iOS and point to hosted backend infrastructure for campus-wide rollout.
+
+## 11) Known Limitations and Next Steps
+
+### Known limitations
+- Current judged scope is core ordering + resilience + real-time tracking.
+- Payment/wallet endpoints are retained as future scope and are not part of judged core flow.
+- Production hardening (secrets vault, mTLS/service identity, rate-limit policy) is not fully implemented.
+- Vercel hosting currently deploys frontend only; full backend stack requires separate runtime/infrastructure.
+
+### Next steps
+- Implement full payment state machine (`PAYMENT_PENDING -> CONFIRMED/FAILED`).
+- Expand service-level tests beyond gateway baseline.
+- Add centralized alerting/SLO dashboards.
+- Add stronger production auth between internal services.
+
+## 12) Demo Accounts and Ports
+
+### Demo accounts
 | Role | Student ID | Password |
 |---|---|---|
 | Admin | `admin-demo` | `admin-pass` |
 | Student | `240041246` | `pass123` |
-| Student | `240041248` | `pass 246` |
-| Student | `240041250` | `pass 369` |
 
-## Smoke Test
-Run end-to-end integration checks after starting Docker stack:
+### Core ports
+| Component | Port |
+|---|---|
+| Web UI | `3000` |
+| Identity Provider | `8001` |
+| Order Gateway | `8002` |
+| Stock Service | `8003` |
+| Kitchen Queue/Worker | `8004` |
+| Notification Hub | `8005` |
+| PostgreSQL | `5432` |
+| Redis | `6379` |
+| RabbitMQ | `5672` (`15672` UI) |
 
+## 13) AI Tooling Acknowledgment
+
+This project was developed with human engineering decisions and implementation support from AI coding assistants:
+- ChatGPT
+- Claude
+- GitHub Copilot
+
+All architecture, code, tests, and documentation changes were reviewed and integrated by the project team before submission.
+
+## 14) Error Handling Guide
+
+### API-level error conventions
+- `400`: invalid request payload/business rule mismatch.
+- `401`: missing/invalid/expired JWT.
+- `403`: authenticated but not authorized (admin-only routes).
+- `404`: resource not found.
+- `409`: conflict (for example stock reservation conflict or idempotency clash).
+- `422`: validation failure.
+- `503`: dependency unavailable or service in chaos/fail mode.
+
+### Service failure behavior
+- Identity Provider down: login/verify flows fail fast with upstream unavailability.
+- Stock Service down: order creation is rejected safely; stock remains consistent.
+- Kitchen Queue down: order API remains responsive but processing degrades based on queue availability.
+- Notification Hub down: ordering still works; real-time push pauses until recovery.
+
+### Operational recovery checklist
 ```bash
-make smoke-test
+# 1) Check container and endpoint health
+make ps
+./scripts/health-check.sh
+
+# 2) Inspect failing service logs
+docker compose -f infra/docker-compose.yml logs -f --tail=200 <service-name>
+
+# 3) Restart only the failing service
+docker compose -f infra/docker-compose.yml restart <service-name>
+
+# 4) Re-run smoke test
+./scripts/smoke-test.sh
 ```
 
-Expected result: all phases pass (`auth`, `menu`, `create`, `status`, `admin metrics`) with no `FAIL` lines.
-
-## Demo Script
-Judge-facing demo sequence is documented in:
-- `docs/demo-script.md`
-
-## Payment Scope For Submission
-This submission uses **Option 2** (no wallet/top-up claims in judged flow):
-- Student and admin UI navigation does not expose wallet/top-up pages.
-- Judge demo flow is strictly: login -> menu -> order -> live status -> admin health/metrics/chaos.
-- Mock wallet/provider webhook endpoints remain in backend as future work, not part of required demo.
-
-## Known Limitations
-- Web order tracking may use polling in some flows; websocket updates are available in real mode where configured.
-- Production deployment needs real TLS/domain setup and reverse-proxy routing for API/admin paths.
+### Client-side handling expectations
+- Retry transient failures (`503`, network timeout) with bounded backoff.
+- Never retry non-idempotent order creation without the same `Idempotency-Key`.
+- Show user-safe fallback states:
+  - auth expired -> redirect to login
+  - real-time channel disconnected -> show reconnecting status
+  - order conflict -> show latest stock/status from server
