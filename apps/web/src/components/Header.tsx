@@ -34,7 +34,6 @@ function NavLink({ href, label }: { href: string; label: string }) {
 
 export function Header() {
   const pathname = usePathname();
-  const isDemoMode = process.env.NEXT_PUBLIC_API_MODE !== "real";
   const [cartCount, setCartCount] = useState(0);
   const [currentUser, setCurrentUser] = useState<User | null>(null);
   const [mounted, setMounted] = useState(false);
@@ -84,11 +83,6 @@ export function Header() {
 
   return (
     <header className="sticky top-0 z-10 border-b border-zinc-200 bg-white/80 backdrop-blur dark:border-zinc-900 dark:bg-zinc-950/80">
-      {isDemoMode && (
-        <div className="border-b border-amber-200 bg-amber-50 px-4 py-1 text-center text-xs font-medium text-amber-800 dark:border-amber-900/60 dark:bg-amber-950/40 dark:text-amber-200">
-          Demo Mode
-        </div>
-      )}
       <div className="mx-auto flex max-w-4xl items-center justify-between px-3 py-2 sm:px-4 sm:py-3">
         <Link href="/menu" className="flex items-center gap-2">
           <Image
@@ -126,7 +120,6 @@ export function Header() {
           onClick={() => setMobileOpen((v) => !v)}
           className="rounded-lg border border-zinc-200 px-2 py-1 text-sm text-zinc-700 hover:bg-zinc-100 sm:hidden dark:border-zinc-800 dark:text-zinc-200 dark:hover:bg-zinc-900"
           aria-label="Toggle navigation menu"
-          aria-expanded={mobileOpen}
         >
           {mobileOpen ? "Close" : "Menu"}
         </button>

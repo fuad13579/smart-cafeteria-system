@@ -1,7 +1,7 @@
 "use client";
 
 import { useEffect, useMemo, useState } from "react";
-import { getMenu, type MenuItem, type MenuMain, type MenuSlot } from "@/lib/api";
+import { getMenu, me, type MenuItem, type MenuMain, type MenuSlot } from "@/lib/api";
 import { getCart, getUser, setCart, type CartLine, type User } from "@/lib/storage";
 import { useToast } from "@/components/ToastProvider";
 import Link from "next/link";
@@ -74,6 +74,21 @@ export default function MenuClient() {
     return () => {
       window.removeEventListener("storage", sync);
       clearInterval(t);
+    };
+  }, []);
+
+  useEffect(() => {
+    let cancelled = false;
+
+    me()
+      .then((res) => {
+        if (cancelled) return;
+        setCurrentUser(res.user);
+      })
+      .catch(() => {});
+
+    return () => {
+      cancelled = true;
     };
   }, []);
 

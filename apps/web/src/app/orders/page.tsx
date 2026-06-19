@@ -31,7 +31,7 @@ function buildMockSlipHtml(input: {
   </head>
   <body>
     <div class="box">
-      <div class="muted">Smart Cafeteria - Demo Slip</div>
+      <div class="muted">Smart Cafeteria</div>
       <div class="token">TOKEN #${token}</div>
       <div class="row"><strong>Order:</strong> ${input.orderId}</div>
       <div class="row"><strong>Counter:</strong> ${counter}</div>
@@ -173,6 +173,7 @@ export default function OrdersPage() {
               onChange={(e) => {
                 applySelectionAction(e.target.value);
               }}
+              title="Order selection actions"
               className="rounded-lg border border-zinc-300 bg-white px-2 py-1 text-xs text-zinc-800 dark:border-zinc-700 dark:bg-zinc-900 dark:text-zinc-200"
             >
               <option value="none">Clear selection</option>
@@ -209,6 +210,8 @@ export default function OrdersPage() {
                   type="checkbox"
                   checked={!!selected[o.order_id]}
                   onChange={() => toggleSelect(o.order_id)}
+                  aria-label={`Select order ${o.order_id}`}
+                  title={`Select order ${o.order_id}`}
                   className="h-4 w-4 rounded border-zinc-300 text-zinc-900 focus:ring-zinc-500 dark:border-zinc-700 dark:bg-zinc-900"
                 />
                 <Link href={`/orders/${o.order_id}`} className="text-sm font-medium text-zinc-900 hover:underline dark:text-zinc-100">
