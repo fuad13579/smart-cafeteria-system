@@ -43,7 +43,7 @@ function buildMockSlipHtml(input: {
   </head>
   <body>
     <div class="box">
-      <div class="muted">Smart Cafeteria - Demo Slip</div>
+      <div class="muted">Smart Cafeteria</div>
       <div class="token">TOKEN #${token}</div>
       <div class="row"><strong>Order:</strong> ${input.orderId}</div>
       <div class="row"><strong>Counter:</strong> ${counter}</div>

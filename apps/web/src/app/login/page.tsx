@@ -1,7 +1,7 @@
 "use client";
 
 import { useEffect, useState } from "react";
-import { login, logout as logoutSession, register } from "@/lib/api";
+import { login, logout as logoutSession, me, register } from "@/lib/api";
 import { clearCart, clearUser, getUser, setUser, type User } from "@/lib/storage";
 import Link from "next/link";
 
@@ -17,6 +17,22 @@ export default function LoginPage() {
 
   useEffect(() => {
     setCurrentUser(getUser());
+  }, []);
+
+  useEffect(() => {
+    let cancelled = false;
+
+    me()
+      .then((res) => {
+        if (cancelled) return;
+        setUser(res.user);
+        setCurrentUser(res.user);
+      })
+      .catch(() => {});
+
+    return () => {
+      cancelled = true;
+    };
   }, []);
 
   const submit = async (e: React.FormEvent) => {
