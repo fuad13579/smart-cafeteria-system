@@ -108,6 +108,7 @@ export function Header() {
           <NavLink href="/menu" label="Menu" />
           <NavLink href="/cart" label={`Cart (${cartCount})`} />
           <NavLink href="/orders" label="Orders" />
+          <NavLink href="/wallet" label="Wallet" />
           {currentUser?.role === "admin" && <NavLink href="/kitchen" label="Kitchen" />}
           {currentUser?.role === "admin" && <NavLink href="/admin" label="Admin" />}
 
@@ -141,6 +142,9 @@ export function Header() {
             </Link>
             <Link href="/orders" className={mobileLinkClass("/orders")} onClick={() => setMobileOpen(false)}>
               Orders
+            </Link>
+            <Link href="/wallet" className={mobileLinkClass("/wallet")} onClick={() => setMobileOpen(false)}>
+              Wallet
             </Link>
             {currentUser?.role === "admin" && (
               <Link href="/kitchen" className={mobileLinkClass("/kitchen")} onClick={() => setMobileOpen(false)}>
