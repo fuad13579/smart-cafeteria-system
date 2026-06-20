@@ -115,7 +115,7 @@ export default function LoginScreen({ navigation }: Props) {
           value={password}
           onChangeText={setPassword}
           secureTextEntry
-          placeholder="••••••••"
+          placeholder="********"
           placeholderTextColor="#52525b"
           style={{
             marginTop: 8,
@@ -147,7 +147,7 @@ export default function LoginScreen({ navigation }: Props) {
           }}
         >
           <Text style={{ color: "#09090b", fontWeight: "600" }}>
-            {busy ? (mode === "login" ? "Signing in…" : "Creating…") : mode === "login" ? "Sign in" : "Create account"}
+            {busy ? (mode === "login" ? "Signing in..." : "Creating...") : mode === "login" ? "Sign in" : "Create account"}
           </Text>
         </Pressable>
 

@@ -140,12 +140,57 @@ let mockAccountBalance = 1250;
 let mockOrders: OrderDetails[] = [];
 let mockTx: WalletTx[] = [];
 const mockUsers = new Map<string, { name: string; email: string; password: string; account_balance: number }>();
+mockUsers.set("240041246", {
+  name: "Fuad Bin Sattar",
+  email: "fuad@example.com",
+  password: "pass123",
+  account_balance: 1500,
+});
+mockUsers.set("240041248", {
+  name: "Mahrus Shams",
+  email: "mahrus@example.com",
+  password: "pass 246",
+  account_balance: 1500,
+});
+mockUsers.set("240041250", {
+  name: "Shahriar Hasnat",
+  email: "shahriar@example.com",
+  password: "pass 369",
+  account_balance: 1500,
+});
 mockUsers.set("admin-demo", {
   name: "Demo Admin",
   email: "admin@iut.local",
   password: "admin-pass",
   account_balance: 5000,
 });
+
+async function getStoredMockUser(): Promise<RegisterResp["user"] | null> {
+  try {
+    const raw = await SecureStore.getItemAsync("sc_user");
+    return raw ? JSON.parse(raw) : null;
+  } catch {
+    return null;
+  }
+}
+
+async function resolveMockBalance(): Promise<number> {
+  const user = await getStoredMockUser();
+  if (typeof user?.account_balance === "number") {
+    mockAccountBalance = user.account_balance;
+  }
+  return mockAccountBalance;
+}
+
+async function persistMockBalance(balance: number) {
+  mockAccountBalance = balance;
+  const user = await getStoredMockUser();
+  if (!user) return;
+  await SecureStore.setItemAsync(
+    "sc_user",
+    JSON.stringify({ ...user, account_balance: balance })
+  );
+}
 
 export async function apiLogin(student_id: string, _password: string) {
   if (API_MODE === "mock") {
@@ -329,7 +374,11 @@ export async function apiGetMyOrders(): Promise<{ orders: OrderDetails[] }> {
 export async function apiWalletBalance(): Promise<WalletBalanceResp> {
   if (API_MODE === "mock") {
     await sleep(API_MOCK_DELAY_MS);
-    return { student_id: "mock-user", account_balance: mockAccountBalance };
+    const user = await getStoredMockUser();
+    return {
+      student_id: user?.student_id ?? "mock-user",
+      account_balance: await resolveMockBalance(),
+    };
   }
   const auth = await getAuthHeaders();
   const res = await fetch(resolveUrl("/wallet"), {
@@ -348,7 +397,7 @@ export async function apiWalletTopup(amount: number, method: WalletMethod): Prom
     const topup_id = `topup-${Date.now()}`;
     const completed = method !== "BANK";
     if (completed) {
-      mockAccountBalance += amount;
+      await persistMockBalance((await resolveMockBalance()) + amount);
     }
     const transaction: WalletTx = {
       transaction_id: topup_id,
@@ -361,7 +410,7 @@ export async function apiWalletTopup(amount: number, method: WalletMethod): Prom
     mockTx = [transaction, ...mockTx].slice(0, 100);
     return {
       ok: true,
-      account_balance: mockAccountBalance,
+      account_balance: await resolveMockBalance(),
       topup: {
         topup_id,
         amount,

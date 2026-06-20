@@ -101,7 +101,7 @@ export default function MenuScreen({ navigation }: Props) {
         <TextInput
           value={q}
           onChangeText={setQ}
-          placeholder="Search…"
+          placeholder="Search..."
           placeholderTextColor="#52525b"
           style={{
             flex: 1,
@@ -138,7 +138,7 @@ export default function MenuScreen({ navigation }: Props) {
         <Text style={{ color: "#fafafa", fontSize: 18, fontWeight: "700", marginTop: 2 }}>BDT {balance ?? 0}</Text>
       </View>
 
-      {loading && <Text style={{ color: "#a1a1aa" }}>Loading menu…</Text>}
+      {loading && <Text style={{ color: "#a1a1aa" }}>Loading menu...</Text>}
       {err && <Text style={{ color: "#fecaca" }}>{err}</Text>}
 
       <FlatList

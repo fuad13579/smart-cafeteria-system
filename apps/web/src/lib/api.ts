@@ -211,6 +211,48 @@ type MockTopup = {
 };
 let mockWalletTopups: MockTopup[] = [];
 
+function getStoredMockUser(): LoginResponse["user"] | null {
+  if (typeof window === "undefined") return null;
+  try {
+    const raw = localStorage.getItem("cafeteria:user");
+    return raw ? JSON.parse(raw) : null;
+  } catch {
+    return null;
+  }
+}
+
+function resolveMockUser(): LoginResponse["user"] | null {
+  return mockAuthUser ?? getStoredMockUser();
+}
+
+function resolveMockBalance(): number {
+  const user = resolveMockUser();
+  if (typeof user?.account_balance === "number") {
+    mockAccountBalance = user.account_balance;
+  }
+  return mockAccountBalance;
+}
+
+function persistMockBalance(balance: number) {
+  mockAccountBalance = balance;
+  if (mockAuthUser) {
+    mockAuthUser = { ...mockAuthUser, account_balance: balance };
+  }
+  if (typeof window === "undefined") return;
+  try {
+    const raw = localStorage.getItem("cafeteria:user");
+    if (!raw) return;
+    const user = JSON.parse(raw);
+    localStorage.setItem(
+      "cafeteria:user",
+      JSON.stringify({ ...user, account_balance: balance })
+    );
+    window.dispatchEvent(new Event("storage"));
+  } catch {
+    // ignore mock storage sync errors
+  }
+}
+
 function parseApiErrorMessage(raw: any, status: number): string {
   if (raw?.message && typeof raw.message === "string") return raw.message;
   if (raw?.detail && typeof raw.detail === "string") return raw.detail;
@@ -321,6 +363,7 @@ async function makeMockRequest<T>(
       role: "student" as const,
     };
     mockAuthUser = user;
+    persistMockBalance(0);
     return {
       access_token: "mock-token",
       user,
@@ -328,28 +371,14 @@ async function makeMockRequest<T>(
   }
 
   if (method === "GET" && endpoint === "/auth/me") {
-    const storageUser =
-      typeof window !== "undefined"
-        ? (() => {
-            try {
-              const raw = localStorage.getItem("cafeteria:user");
-              return raw ? JSON.parse(raw) : null;
-            } catch {
-              return null;
-            }
-          })()
-        : null;
-    const user = mockAuthUser ?? storageUser;
+    const user = resolveMockUser();
     if (!user) {
       throw new Error("Missing or invalid token");
     }
     return {
       user: {
         ...user,
-        account_balance:
-          typeof user.account_balance === "number"
-            ? user.account_balance
-            : mockAccountBalance,
+        account_balance: resolveMockBalance(),
         role: user.role || "student",
       },
     } as T;
@@ -358,7 +387,7 @@ async function makeMockRequest<T>(
   if (method === "GET" && (endpoint === "/wallet/balance" || endpoint === "/wallet")) {
     return {
       student_id: "2100000",
-      account_balance: mockAccountBalance,
+      account_balance: resolveMockBalance(),
     } as T;
   }
 
@@ -408,7 +437,7 @@ async function makeMockRequest<T>(
       ...mockWalletTopups,
     ];
     if (completedNow) {
-      mockAccountBalance += Math.max(amount, 0);
+      persistMockBalance(resolveMockBalance() + Math.max(amount, 0));
     }
     return {
       ok: true,
@@ -442,7 +471,7 @@ async function makeMockRequest<T>(
           reference_id: String(body?.provider_txn_id || `${provider}-MOCK-${Date.now()}`),
           completed_at: new Date().toISOString(),
         };
-        mockAccountBalance += mockWalletTopups[idx].amount;
+        persistMockBalance(resolveMockBalance() + mockWalletTopups[idx].amount);
       } else {
         mockWalletTopups[idx] = {
           ...mockWalletTopups[idx],
