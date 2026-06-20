@@ -74,18 +74,31 @@ flowchart LR
 - Node.js 20+
 - npm
 
-### Start everything (single command)
+### Start backend services
+```bash
+docker compose -f infra/docker-compose.yml up -d
+```
+
+This starts the backend stack: PostgreSQL, PgBouncer, Redis, RabbitMQ, Identity Provider, Order Gateway, Stock Service, Kitchen Queue, Notification Hub, and Payment Service.
+
+It does not start the Next.js web frontend or Expo mobile app.
+
+### Rebuild backend services
 ```bash
 docker compose -f infra/docker-compose.yml up -d --build
 ```
 
-### Optional: run web/mobile clients
-```bash
-npm --prefix apps/web install
-npm --prefix apps/mobile install
-npm --prefix apps/web run dev
-npm --prefix apps/mobile start
+Use this after changing backend service code, Dockerfiles, or dependency files.
+
+### Run web/mobile clients
+```powershell
+npm.cmd --prefix apps/web install
+npm.cmd --prefix apps/mobile install
+npm.cmd --prefix apps/web run dev
+npm.cmd --prefix apps/mobile start
 ```
+
+PowerShell note: use `npm.cmd` on Windows if `npm.ps1` is blocked by execution policy.
 
 ### Quick verification with curl
 ```bash
@@ -94,7 +107,12 @@ curl -i http://localhost:8002/health
 curl -i http://localhost:8003/health
 curl -i http://localhost:8004/health
 curl -i http://localhost:8005/health
+curl -i http://localhost:8006/health
 ```
+
+### Full command reference
+
+See `docs/COMMAND_REFERENCE.md` for command-by-command explanations, including Docker, frontend, mobile, database, test, API demo, and recovery commands.
 
 ## Configuration
 
@@ -215,8 +233,9 @@ npx wscat -c "ws://localhost:8005/ws/orders/<ORDER_ID>?token=$TOKEN"
 services/order-gateway/.venv/bin/python -m pytest -q services/order-gateway/tests
 
 # Frontend quality gates
-cd apps/web && npm run lint && npm run build -- --webpack
-cd apps/mobile && npm run lint
+npm.cmd --prefix apps/web run lint
+npm.cmd --prefix apps/web run build -- --webpack
+npm.cmd --prefix apps/mobile run lint
 ```
 
 ### CI contract
@@ -306,9 +325,9 @@ smart-cafeteria-system/
 - What it does: student-facing mobile flow for login, menu browsing, order placement, and order tracking using the same backend APIs.
 - Where the code is: `apps/mobile/` (screens/components under `apps/mobile/src/`).
 - How to run locally:
-```bash
-npm --prefix apps/mobile install
-npm --prefix apps/mobile start
+```powershell
+npm.cmd --prefix apps/mobile install
+npm.cmd --prefix apps/mobile start
 ```
 - Configuration: set API target in `apps/mobile/.env` (see `Configuration` section).
 - Future use: package for Android/iOS and point to hosted backend infrastructure for campus-wide rollout.

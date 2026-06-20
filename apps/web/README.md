@@ -1,36 +1,138 @@
-This is a [Next.js](https://nextjs.org) project bootstrapped with [`create-next-app`](https://nextjs.org/docs/app/api-reference/cli/create-next-app).
+# Smart Cafeteria Web Frontend
 
-## Getting Started
+This is the Next.js frontend for the Smart Cafeteria System. It provides the student ordering flow, wallet page, order tracking, kitchen view, and admin dashboard.
 
-First, run the development server:
+## Prerequisites
 
-```bash
-npm run dev
-# or
-yarn dev
-# or
-pnpm dev
-# or
-bun dev
+- Node.js 20+
+- npm
+- Backend Docker stack running from the repo root
+
+On Windows PowerShell, use `npm.cmd` instead of `npm` if script execution is blocked.
+
+## Run Locally
+
+From the repo root:
+
+```powershell
+npm.cmd --prefix apps/web install
+npm.cmd --prefix apps/web run dev
 ```
 
-Open [http://localhost:3000](http://localhost:3000) with your browser to see the result.
+Open:
 
-You can start editing the page by modifying `app/page.tsx`. The page auto-updates as you edit the file.
+```text
+http://localhost:3000
+```
 
-This project uses [`next/font`](https://nextjs.org/docs/app/building-your-application/optimizing/fonts) to automatically optimize and load [Geist](https://vercel.com/font), a new font family for Vercel.
+The frontend expects the backend gateway at `http://localhost:8002` when running in real mode.
 
-## Learn More
+## Backend Requirement
 
-To learn more about Next.js, take a look at the following resources:
+Start the backend stack from the repo root before using real API mode:
 
-- [Next.js Documentation](https://nextjs.org/docs) - learn about Next.js features and API.
-- [Learn Next.js](https://nextjs.org/learn) - an interactive Next.js tutorial.
+```powershell
+docker compose -f infra/docker-compose.yml up -d
+```
 
-You can check out [the Next.js GitHub repository](https://github.com/vercel/next.js) - your feedback and contributions are welcome!
+This starts the backend services, database, Redis, and RabbitMQ. It does not start the Next.js frontend.
 
-## Deploy on Vercel
+## Environment
 
-The easiest way to deploy your Next.js app is to use the [Vercel Platform](https://vercel.com/new?utm_medium=default-template&filter=next.js&utm_source=create-next-app&utm_campaign=create-next-app-readme) from the creators of Next.js.
+Local environment file:
 
-Check out our [Next.js deployment documentation](https://nextjs.org/docs/app/building-your-application/deploying) for more details.
+```text
+apps/web/.env.local
+```
+
+Expected demo values:
+
+```env
+NEXT_PUBLIC_API_MODE=real
+NEXT_PUBLIC_API_BASE_URL=http://localhost:8002
+NEXT_PUBLIC_API_PREFIX=/api
+NEXT_PUBLIC_NOTIFICATION_WS_URL=ws://localhost:8005/ws
+ACCESS_COOKIE_NAME=access_token
+```
+
+Meaning:
+
+- `NEXT_PUBLIC_API_MODE=real`: use backend APIs instead of frontend mock responses.
+- `NEXT_PUBLIC_API_BASE_URL=http://localhost:8002`: order gateway base URL.
+- `NEXT_PUBLIC_API_PREFIX=/api`: gateway API prefix.
+- `NEXT_PUBLIC_NOTIFICATION_WS_URL=ws://localhost:8005/ws`: notification WebSocket URL.
+- `ACCESS_COOKIE_NAME=access_token`: auth cookie name used by admin API routes.
+
+## Scripts
+
+```powershell
+npm.cmd --prefix apps/web run dev
+```
+
+Starts the Next.js development server on `http://localhost:3000`.
+
+```powershell
+npm.cmd --prefix apps/web run build -- --webpack
+```
+
+Builds the production app and runs TypeScript checks. The `-- --webpack` part passes `--webpack` to Next.js.
+
+```powershell
+npm.cmd --prefix apps/web run start
+```
+
+Serves the production build. Run the build command first.
+
+```powershell
+npm.cmd --prefix apps/web run lint
+```
+
+Runs ESLint for the web app.
+
+## Demo Accounts
+
+Student:
+
+```text
+Student ID: 240041246
+Password: pass123
+```
+
+Admin:
+
+```text
+Student ID: admin-demo
+Password: admin-pass
+```
+
+Admin dashboard:
+
+```text
+http://localhost:3000/admin
+```
+
+## Useful Checks
+
+Check gateway directly:
+
+```powershell
+Invoke-WebRequest -UseBasicParsing http://localhost:8002/health
+```
+
+Check frontend is running:
+
+```text
+http://localhost:3000
+```
+
+Check Docker services:
+
+```powershell
+docker ps --format "table {{.Names}}\t{{.Status}}\t{{.Ports}}"
+```
+
+For the full command breakdown, see:
+
+```text
+docs/COMMAND_REFERENCE.md
+```
