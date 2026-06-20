@@ -15,7 +15,10 @@ function NavLink({ href, label }: { href: string; label: string }) {
     setMounted(true);
   }, []);
 
-  const active = mounted && (pathname === href || (href !== "/" && pathname?.startsWith(href)));
+  const active = (() => {
+    if (!mounted) return false;
+    return pathname === href || (href !== "/" && pathname.startsWith(href));
+  })();
 
   return (
     <Link
@@ -67,11 +70,15 @@ export function Header() {
 
   const toggleTheme = () => {
     if (!mounted) return;
-    setTheme(resolvedTheme === "dark" ? "light" : "dark");
+    if (resolvedTheme === "dark") {
+      setTheme("light");
+      return;
+    }
+    setTheme("dark");
   };
 
   const isActive = (href: string) =>
-    mounted && (pathname === href || (href !== "/" && pathname?.startsWith(href)));
+    mounted ? pathname === href || (href !== "/" && pathname.startsWith(href)) : false;
 
   const mobileLinkClass = (href: string) =>
     [

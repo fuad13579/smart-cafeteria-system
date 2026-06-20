@@ -25,8 +25,8 @@ function buildMockSlipHtml(input: {
   eta: number;
 }) {
   const now = new Date().toLocaleString();
-  const token = input.tokenNo ?? "-";
-  const counter = input.pickupCounter ?? 1;
+  const token = input.tokenNo === null ? "-" : input.tokenNo;
+  const counter = input.pickupCounter === null ? 1 : input.pickupCounter;
   return `<!doctype html>
 <html>
   <head>
@@ -98,15 +98,17 @@ export default function OrderPage() {
         setReadyUntil(typeof res.ready_until === "string" ? res.ready_until : null);
         setServerExpired(Boolean(res.is_expired));
         setEta(Math.max(0, res.eta_minutes ?? 0));
-        if (terminalStates.includes(res.status) && pollRef) {
+        if (terminalStates.includes(res.status) && pollRef !== null) {
           clearInterval(pollRef);
           pollRef = null;
         }
       } catch (e: any) {
         if (cancelled) return;
-        setErr(e?.message ?? "Failed to load order status");
+        const message = e && typeof e === "object" && "message" in e ? String((e as { message?: unknown }).message) : "Failed to load order status";
+        setErr(message || "Failed to load order status");
       } finally {
-        if (!cancelled) setLoading(false);
+        if (cancelled) return;
+        setLoading(false);
       }
     };
 
@@ -191,7 +193,10 @@ export default function OrderPage() {
         setServerExpired(Boolean(res.is_expired));
         setEta(Math.max(0, res.eta_minutes ?? 0));
       })
-      .catch((e: any) => setErr(e?.message ?? "Failed to load order status"))
+      .catch((e: any) => {
+        const message = e && typeof e === "object" && "message" in e ? String((e as { message?: unknown }).message) : "Failed to load order status";
+        setErr(message || "Failed to load order status");
+      })
       .finally(() => setLoading(false));
   };
 

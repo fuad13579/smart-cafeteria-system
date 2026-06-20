@@ -93,14 +93,14 @@ export default function MenuClient() {
   }, []);
 
   useEffect(() => {
-    if (!ramadanVisible && currentMain === "ramadan") {
-      router.replace("/menu?main=regular&slot=breakfast");
-    }
+    if (currentMain !== "ramadan" || ramadanVisible) return;
+    router.replace("/menu?main=regular&slot=breakfast");
   }, [ramadanVisible, currentMain, router]);
 
   const filtered = useMemo(() => {
     const s = q.trim().toLowerCase();
-    return items.filter((i) => !s || i.name.toLowerCase().includes(s));
+    if (!s) return items;
+    return items.filter((i) => i.name.toLowerCase().includes(s));
   }, [items, q]);
 
   const switchMain = (nextMain: MenuMain) => {
@@ -116,9 +116,9 @@ export default function MenuClient() {
     const cart = getCart();
     const idx = cart.findIndex((c: CartLine) => c.id === item.id);
     const next: CartLine[] =
-      idx >= 0
-        ? cart.map((c: CartLine, i: number) => (i === idx ? { ...c, qty: c.qty + 1 } : c))
-        : [...cart, { id: item.id, name: item.name, price: item.price, qty: 1, available: item.available }];
+      idx < 0
+        ? [...cart, { id: item.id, name: item.name, price: item.price, qty: 1, available: item.available }]
+        : cart.map((c: CartLine, i: number) => (i === idx ? { ...c, qty: c.qty + 1 } : c));
     setCart(next);
     showToast(`${item.name} added to cart`, "success");
   };
@@ -145,6 +145,7 @@ export default function MenuClient() {
               value={q}
               onChange={(e) => setQ(e.target.value)}
               placeholder="Search items..."
+              title="Search items"
               className="w-full rounded-xl border border-zinc-300 bg-white px-3 py-2 text-sm text-zinc-900 outline-none placeholder-zinc-500 focus:border-zinc-500 dark:border-zinc-800 dark:bg-zinc-950 dark:text-white dark:placeholder-zinc-400 dark:focus:border-zinc-600 sm:w-64"
             />
             <Link
