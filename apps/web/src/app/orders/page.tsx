@@ -13,8 +13,8 @@ function buildMockSlipHtml(input: {
   eta: number;
 }) {
   const now = new Date().toLocaleString();
-  const token = input.tokenNo ?? "-";
-  const counter = input.pickupCounter ?? 1;
+  const token = input.tokenNo === null ? "-" : input.tokenNo;
+  const counter = input.pickupCounter === null ? 1 : input.pickupCounter;
   return `<!doctype html>
 <html>
   <head>
@@ -69,9 +69,11 @@ export default function OrdersPage() {
         setOrders(sorted);
       } catch (e: any) {
         if (cancelled) return;
-        setErr(e?.message ?? "Failed to load your orders");
+        const message = e && typeof e === "object" && "message" in e ? String((e as { message?: unknown }).message) : "Failed to load your orders";
+        setErr(message || "Failed to load your orders");
       } finally {
-        if (!cancelled) setLoading(false);
+        if (cancelled) return;
+        setLoading(false);
       }
     };
 
@@ -84,7 +86,11 @@ export default function OrdersPage() {
   }, []);
 
   const toggleSelect = (orderId: string) => {
-    setSelected((prev) => ({ ...prev, [orderId]: !prev[orderId] }));
+    setSelected((prev) => {
+      const next = { ...prev };
+      next[orderId] = prev[orderId] !== true;
+      return next;
+    });
   };
 
   const applySelectionAction = (action: string) => {
@@ -99,7 +105,7 @@ export default function OrdersPage() {
     }
   };
 
-  const selectedIds = orders.filter((o) => selected[o.order_id]).map((o) => o.order_id);
+  const selectedIds = orders.filter((o) => selected[o.order_id] === true).map((o) => o.order_id);
 
   const onDeleteSelected = async () => {
     if (selectedIds.length === 0) {
@@ -109,11 +115,12 @@ export default function OrdersPage() {
     try {
       setDeleting(true);
       await Promise.all(selectedIds.map((id) => deleteOrder(id)));
-      setOrders((prev) => prev.filter((o) => !selected[o.order_id]));
+      setOrders((prev) => prev.filter((o) => selected[o.order_id] !== true));
       setSelected({});
       showToast("Selected orders deleted", "success");
     } catch (e: any) {
-      showToast(e?.message ?? "Failed to delete selected orders", "error");
+      const message = e && typeof e === "object" && "message" in e ? String((e as { message?: unknown }).message) : "Failed to delete selected orders";
+      showToast(message || "Failed to delete selected orders", "error");
     } finally {
       setDeleting(false);
     }
